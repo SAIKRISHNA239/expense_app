@@ -1,19 +1,24 @@
 <script lang="ts">
-  import { safeToSpend, variableCategorySpending, budgets, monthlyIncome, totalFixedCosts } from './store';
+  import { thisMonthData, budgetState, CATEGORIES } from './store';
   import { Wallet } from 'lucide-svelte';
 
   const formatINR = (n: number) => 
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
-  $: spending = $variableCategorySpending;
+  $: derivedState = $thisMonthData;
+  $: safe = derivedState.safeToSpend;
   
-  // Create progress bars data. Use user-defined budgets or default to 5000 if not set.
-  $: progressData = Object.entries(spending).map(([cat, amt]) => {
-    const budgetObj = $budgets.find(b => b.category === cat);
-    // If no explicit budget exists, let's just use 5000 as a placeholder to show visual bars
-    const limit = budgetObj ? budgetObj.limit : 5000;
-    const pct = Math.min((amt / limit) * 100, 100);
-    return { cat, amt, limit, pct, rawPct: (amt / limit) * 100 };
+  // Create progress bars data. 
+  // We use the basebudget / CATEGORIES.length as a dummy placeholder limit to visualize
+  $: limitTotal = $budgetState.baseBudget > 0 ? $budgetState.baseBudget : 30000;
+  $: catLimit = limitTotal / CATEGORIES.length;
+
+  $: progressData = CATEGORIES.map((cat) => {
+    const amt = derivedState.currentCategorySpending[cat] || 0;
+    const limit = catLimit;
+    const rawPct = limit === 0 ? 0 : (amt / limit) * 100;
+    const pct = Math.min(rawPct, 100);
+    return { cat, amt, limit, pct, rawPct };
   }).sort((a, b) => b.rawPct - a.rawPct);
 
 </script>
@@ -24,19 +29,28 @@
     <div class="w-16 h-16 rounded-full bg-[var(--color-dark-surface)] flex items-center justify-center mb-4 border border-[var(--color-dark-border)] shadow-md">
       <Wallet class="w-8 h-8 text-[#F2F2F7]" />
     </div>
-    <span class="text-sm text-gray-400 font-medium uppercase tracking-widest mb-1">Safe to Spend</span>
-    <h1 class="text-5xl font-black tracking-tight { $safeToSpend < 0 ? 'text-[var(--color-accent-red)]' : 'text-white' } mb-3">
-      {formatINR($safeToSpend)}
+    <span class="text-[11px] text-gray-500 font-bold uppercase tracking-widest mb-1 text-center">Safe to Spend<br/>(Adjusted for Amortization & Rollover)</span>
+    <h1 class="text-5xl font-black tracking-tight { safe < 0 ? 'text-[var(--color-accent-red)]' : 'text-white' } mb-4">
+      {formatINR(safe)}
     </h1>
     
-    <div class="flex gap-4 text-xs font-semibold px-4 py-2 bg-[var(--color-dark-surface)] rounded-full text-gray-400 border border-[var(--color-dark-border)]">
-      <span>Income: <span class="text-white">{formatINR($monthlyIncome)}</span></span>
-      <div class="w-px h-full bg-[var(--color-dark-border)]"></div>
-      <span>Fixed: <span class="text-white">{formatINR($totalFixedCosts)}</span></span>
+    <div class="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs font-semibold px-4 py-3 bg-[var(--color-dark-surface)] rounded-2xl text-gray-400 border border-[var(--color-dark-border)] w-full max-w-[300px]">
+      <div class="flex w-full justify-between items-center text-center">
+        <span class="text-left">Income: <span class="text-white block">{formatINR($budgetState.monthlyIncome)}</span></span>
+        <div class="w-px h-6 bg-[var(--color-dark-border)]"></div>
+        <span class="text-right">Auto-Pays: <span class="text-white block">{formatINR(derivedState.totalAutoPays)}</span></span>
+      </div>
+      <div class="w-full h-px bg-[var(--color-dark-border)]"></div>
+      <div class="flex w-full justify-between items-center text-center">
+        <span class="text-left w-full text-[11px] uppercase tracking-wider">Dynamic Rollover Deficit/Surplus: </span>
+        <span class="text-right font-bold pl-2 {derivedState.dynamicRollover < 0 ? 'text-[var(--color-accent-red)]' : 'text-[var(--color-accent-green)]'}">
+          {derivedState.dynamicRollover >= 0 ? '+' : ''}{formatINR(derivedState.dynamicRollover)}
+        </span>
+      </div>
     </div>
   </div>
 
-  <h2 class="text-lg font-bold mb-4 px-1 text-white tracking-tight">Category Spending</h2>
+  <h2 class="text-lg font-bold mb-4 px-1 text-white tracking-tight">Amortized Sub-Category Spend</h2>
   
   <div class="space-y-4">
     {#each progressData as { cat, amt, limit, pct, rawPct }}
@@ -58,15 +72,10 @@
             style="width: {pct}%; background-color: {rawPct > 100 ? 'var(--color-accent-red)' : rawPct > 80 ? '#FFD60A' : 'var(--color-accent-blue)'}"
           ></div>
         </div>
-        {#if rawPct > 100}
-          <div class="text-[10px] text-[var(--color-accent-red)] font-semibold mt-1.5 text-right">Over budget!</div>
-        {:else if rawPct > 80}
-          <div class="text-[10px] text-[#FFD60A] font-semibold mt-1.5 text-right">Approaching limit</div>
-        {/if}
       </div>
     {:else}
       <div class="py-10 text-center text-gray-500 font-medium text-sm">
-        No variable spending yet this month.
+        Nothing calculated for this month.
       </div>
     {/each}
   </div>

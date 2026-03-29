@@ -1,47 +1,40 @@
 import { writable, derived } from 'svelte/store';
 
-export type TxType = 'income' | 'variable' | 'fixed' | 'one-time';
-
 export type Transaction = {
   id: string;
   amount: number;
-  type: TxType;
   category: string;
-  date: string; // ISO
+  date: string; // ISO string
+  durationMonths: number;
 };
 
-export type FixedCost = {
+export type AutoPay = {
   id: string;
   name: string;
   amount: number;
   billingDay: number; // 1-31
-  category: string;
 };
 
-export type CategoryBudget = {
-  category: string;
-  limit: number;
+export type BudgetState = {
+  monthlyIncome: number;
+  baseBudget: number; // For future specific category limits/base allocations
+  rolloverAmount: number; // Manual entry starting point
 };
 
-export const DEFAULT_VARIABLE_CATEGORIES = [
-  "Diet (Chicken & Eggs)", 
-  "Travel", 
-  "Outside Food", 
-  "Shopping", 
+export const CATEGORIES = [
+  "Diet (Chicken/Eggs/Paneer)",
+  "Snacks/Chai",
+  "Gym & Supplements",
+  "Travel",
+  "Outside Food",
+  "Shopping",
   "Misc"
 ];
 
-export const DEFAULT_FIXED_CATEGORIES = [
-  "PG/Rent", 
-  "Gym", 
-  "Subscriptions"
-];
-
 const STORAGE_KEYS = {
-  transactions: 'zff_transactions',
-  fixedCosts: 'zff_fixed_costs',
-  budgets: 'zff_budgets',
-  income: 'zff_income_v2'
+  transactions: 'zff_tx_v3',
+  autoPays: 'zff_autopay_v3',
+  budget: 'zff_budget_state_v3'
 };
 
 const loadStorage = <T>(key: string, defaultValue: T): T => {
@@ -62,111 +55,161 @@ const saveStorage = (key: string, value: any) => {
 
 // Main Stores
 export const transactions = writable<Transaction[]>(loadStorage(STORAGE_KEYS.transactions, []));
-export const fixedCosts = writable<FixedCost[]>(loadStorage(STORAGE_KEYS.fixedCosts, []));
-export const budgets = writable<CategoryBudget[]>(loadStorage(STORAGE_KEYS.budgets, []));
-export const monthlyIncome = writable<number>(loadStorage(STORAGE_KEYS.income, 0));
+export const autoPays = writable<AutoPay[]>(loadStorage(STORAGE_KEYS.autoPays, []));
+export const budgetState = writable<BudgetState>(loadStorage(STORAGE_KEYS.budget, {
+  monthlyIncome: 0,
+  baseBudget: 0,
+  rolloverAmount: 0
+}));
 
-// Subscriptions to save on change
-transactions.subscribe(val => saveStorage(STORAGE_KEYS.transactions, val));
-fixedCosts.subscribe(val => saveStorage(STORAGE_KEYS.fixedCosts, val));
-budgets.subscribe(val => saveStorage(STORAGE_KEYS.budgets, val));
-monthlyIncome.subscribe(val => saveStorage(STORAGE_KEYS.income, val));
+transactions.subscribe(v => saveStorage(STORAGE_KEYS.transactions, v));
+autoPays.subscribe(v => saveStorage(STORAGE_KEYS.autoPays, v));
+budgetState.subscribe(v => saveStorage(STORAGE_KEYS.budget, v));
 
-// Derived Stores
-export const currentMonthTransactions = derived(transactions, $txs => {
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  return $txs.filter(tx => {
-    const d = new Date(tx.date);
-    return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-  });
-});
+// Helper to get Year-Month string
+const getYM = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
-export const spentVariableThisMonth = derived(currentMonthTransactions, $txs => {
-  return $txs
-    .filter(tx => tx.type === 'variable')
-    .reduce((sum, tx) => sum + tx.amount, 0);
-});
+// Derived Stores for Complex Math
+export const thisMonthData = derived(
+  [transactions, autoPays, budgetState],
+  ([$txs, $autoPays, $budgetState]) => {
+    const now = new Date();
+    const currentYM = getYM(now);
+    const currentDateMs = now.getTime();
 
-export const totalFixedCosts = derived(fixedCosts, $fc => {
-  return $fc.reduce((sum, cost) => sum + cost.amount, 0);
-});
+    // 1. Calculate Active Month Sets to derive dynamic historical rollover
+    // Find the earliest transaction to know how many months the app has been used
+    let earliestDate = now;
+    $txs.forEach(tx => {
+      const d = new Date(tx.date);
+      if (d < earliestDate) earliestDate = d;
+    });
 
-export const safeToSpend = derived(
-  [monthlyIncome, totalFixedCosts, spentVariableThisMonth],
-  ([$inc, $fix, $var]) => $inc - $fix - $var
+    const activeMonths = new Set<string>();
+    let d = new Date(earliestDate);
+    // Include all months from earliest tx up to last month
+    d.setDate(1); // avoid end-of-month skipping bugs
+    while (getYM(d) !== currentYM) {
+      activeMonths.add(getYM(d));
+      d.setMonth(d.getMonth() + 1);
+    }
+    
+    // Arrays for amortized history
+    const pastAmortizedByMonth: Record<string, number> = {};
+    activeMonths.forEach(m => pastAmortizedByMonth[m] = 0);
+
+    // Current Month calculations
+    let currentAmortizedBurden = 0;
+    const currentCategorySpending: Record<string, number> = {};
+    CATEGORIES.forEach(c => currentCategorySpending[c] = 0);
+
+    // Amortize over transactions
+    $txs.forEach(tx => {
+      if (tx.category === 'Auto-Pay') return; // Handled separately
+      
+      const txDate = new Date(tx.date);
+      const startYear = txDate.getFullYear();
+      const startMonth = txDate.getMonth();
+      const numMonths = tx.durationMonths || 1;
+      const monthlyBurden = tx.amount / numMonths;
+
+      // Distribute burden across the months
+      for (let i = 0; i < numMonths; i++) {
+        const targetDate = new Date(startYear, startMonth + i, 1);
+        const targetYM = getYM(targetDate);
+        
+        if (targetYM === currentYM) {
+          currentAmortizedBurden += monthlyBurden;
+          if (CATEGORIES.includes(tx.category)) {
+            currentCategorySpending[tx.category] += monthlyBurden;
+          } else {
+             // Fallback
+             currentCategorySpending['Misc'] += monthlyBurden;
+          }
+        } else if (activeMonths.has(targetYM)) {
+          pastAmortizedByMonth[targetYM] += monthlyBurden;
+        }
+      }
+    });
+
+    // Calculate Past Auto-Pays
+    // Auto pay occurs every month it was active. Simplified assuming constant auto-pays for history
+    const totalCurrentAutoPays = $autoPays.reduce((sum, ap) => sum + ap.amount, 0);
+    const pastAutoPayBurden = totalCurrentAutoPays * activeMonths.size;
+
+    // Sum past variables
+    const pastVariableBurden = Object.values(pastAmortizedByMonth).reduce((a, b) => a + b, 0);
+
+    // Calculate Dynamic Historical Over/Under
+    const totalHistoricalIncomeAssumed = $budgetState.monthlyIncome * activeMonths.size;
+    const dynamicRollover = $budgetState.rolloverAmount + totalHistoricalIncomeAssumed - pastVariableBurden - pastAutoPayBurden;
+
+    // Safe to Spend = Income + DynamicRollover - AutoPaysThisMonth - Current Amortized Burden
+    const safeToSpend = $budgetState.monthlyIncome + dynamicRollover - totalCurrentAutoPays - currentAmortizedBurden;
+
+    return {
+      safeToSpend,
+      dynamicRollover,
+      currentAmortizedBurden,
+      currentCategorySpending,
+      totalAutoPays: totalCurrentAutoPays
+    };
+  }
 );
 
-export const variableCategorySpending = derived(currentMonthTransactions, $txs => {
-  const spending: Record<string, number> = {};
-  $txs.filter(tx => tx.type === 'variable').forEach(tx => {
-    spending[tx.category] = (spending[tx.category] || 0) + tx.amount;
-  });
-  return spending;
-});
-
-// Auto-Billing Logic
+// Auto-Billing Logic (for Dashboard UI if they want to see them as history, but since we treat Auto-Pays implicitly in Safe-To-Spend, we don't necessarily need to mint transactions for them unless we want them in recent logs. The prompt says: "check if today's date matches any Auto-Pay billingDay and auto-add it to Transactions if not already added this month.")
 export const runAutoBilling = () => {
   if (typeof window === 'undefined') return;
-  
   const now = new Date();
-  const currentDay = now.getDate();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
+  const currentYM = getYM(now);
 
-  let fcList: FixedCost[] = [];
-  fixedCosts.subscribe(v => fcList = v)();
+  autoPays.update(aps => {
+    transactions.update(txs => {
+      let added = false;
+      aps.forEach(ap => {
+        // Did we pass the billing day?
+        const currentDay = now.getDate();
+        const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const effectiveDay = Math.min(ap.billingDay, lastDayOfMonth);
 
-  let txList: Transaction[] = [];
-  transactions.subscribe(v => txList = v)();
+        if (currentDay >= effectiveDay) {
+          // Check if already auto-billed this month
+          const alreadyBilled = txs.some(tx => {
+            return tx.category === 'Auto-Pay' && tx.amount === ap.amount && getYM(new Date(tx.date)) === currentYM;
+          });
 
-  let addedNew = false;
-  
-  fcList.forEach(cost => {
-    // Has the billing day passed or is it today?
-    // Also, handle cases where billingday is 31 but month has 30 days. Let's just say if currentDay >= cost.billingDay (or it's the last day of the month)
-    const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-    const effectiveBillingDay = Math.min(cost.billingDay, lastDayOfMonth);
-
-    if (currentDay >= effectiveBillingDay) {
-      // Check if already billed this month
-      const alreadyBilled = txList.some(tx => {
-        if (tx.type !== 'fixed' || tx.category !== cost.category) return false;
-        const d = new Date(tx.date);
-        return d.getMonth() === currentMonth && d.getFullYear() === currentYear && tx.amount === cost.amount;
+          if (!alreadyBilled) {
+            txs.push({
+              id: `ap-${Date.now()}-${Math.random().toString(36).substr(2,9)}`,
+              amount: ap.amount,
+              category: 'Auto-Pay',
+              date: new Date().toISOString(),
+              durationMonths: 1
+            });
+            added = true;
+          }
+        }
       });
 
-      if (!alreadyBilled) {
-        txList.push({
-          id: `auto-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          amount: cost.amount,
-          type: 'fixed',
-          category: cost.category,
-          date: new Date().toISOString()
-        });
-        addedNew = true;
+      if (added) {
+        txs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        return [...txs];
       }
-    }
+      return txs;
+    });
+    return aps;
   });
-
-  if (addedNew) {
-    // Sort descending by date
-    txList.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    transactions.set(txList);
-  }
 };
 
-// Store Actions API
 export const financeApi = {
-  addTransaction: (amount: number, type: TxType, category: string) => {
+  addTransaction: (amount: number, category: string, durationMonths: number = 1) => {
     transactions.update(txs => [
       {
         id: Date.now().toString(),
         amount,
-        type,
         category,
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
+        durationMonths
       },
       ...txs
     ]);
@@ -174,52 +217,39 @@ export const financeApi = {
   removeTransaction: (id: string) => {
     transactions.update(txs => txs.filter(t => t.id !== id));
   },
-  addFixedCost: (name: string, amount: number, billingDay: number, category: string) => {
-    fixedCosts.update(fc => [
-      ...fc, 
-      { id: Date.now().toString(), name, amount, billingDay, category }
+  addAutoPay: (name: string, amount: number, billingDay: number) => {
+    autoPays.update(aps => [
+      ...aps,
+      { id: Date.now().toString(), name, amount, billingDay }
     ]);
-    runAutoBilling(); // Check immediately
+    runAutoBilling();
   },
-  removeFixedCost: (id: string) => {
-    fixedCosts.update(fc => fc.filter(c => c.id !== id));
+  removeAutoPay: (id: string) => {
+    autoPays.update(aps => aps.filter(ap => ap.id !== id));
   },
-  setBudget: (category: string, limit: number) => {
-    budgets.update(bgts => {
-      const idx = bgts.findIndex(b => b.category === category);
-      if (idx !== -1) {
-        bgts[idx].limit = limit;
-        return [...bgts];
-      }
-      return [...bgts, { category, limit }];
-    });
-  },
-  setIncome: (amount: number) => {
-    monthlyIncome.set(amount);
+  updateBudget: (monthlyIncome: number, baseBudget: number, rolloverAmount: number) => {
+    budgetState.set({ monthlyIncome, baseBudget, rolloverAmount });
   },
   exportData: () => {
-    let t, f, b, i;
+    let t, a, b;
     transactions.subscribe(v => t = v)();
-    fixedCosts.subscribe(v => f = v)();
-    budgets.subscribe(v => b = v)();
-    monthlyIncome.subscribe(v => i = v)();
-
-    const data = { transactions: t, fixedCosts: f, budgets: b, income: i };
+    autoPays.subscribe(v => a = v)();
+    budgetState.subscribe(v => b = v)();
+    const data = { transactions: t, autoPays: a, budgetState: b };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `zff-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `zff-v3-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
     URL.revokeObjectURL(url);
   },
-  importData: (jsonData: string) => {
+  importData: (jsonStr: string) => {
     try {
-      const data = JSON.parse(jsonData);
+      const data = JSON.parse(jsonStr);
       if (data.transactions) transactions.set(data.transactions);
-      if (data.fixedCosts) fixedCosts.set(data.fixedCosts);
-      if (data.budgets) budgets.set(data.budgets);
-      if (data.income !== undefined) monthlyIncome.set(data.income);
+      if (data.autoPays) autoPays.set(data.autoPays);
+      if (data.budgetState) budgetState.set(data.budgetState);
       return true;
     } catch {
       return false;
@@ -227,7 +257,7 @@ export const financeApi = {
   }
 };
 
-// Run autobilling once on startup if in browser
+// Check autobilling on boot
 if (typeof window !== 'undefined') {
   setTimeout(runAutoBilling, 500);
 }
