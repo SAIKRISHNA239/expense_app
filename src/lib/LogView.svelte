@@ -1,12 +1,17 @@
 <script lang="ts">
-  import { financeApi, transactions, CATEGORIES } from './store';
+  import { financeApi, transactions, CATEGORIES, formatDate, formatTime } from './store';
   import Numpad from './Numpad.svelte';
-  import { Trash2, CheckCircle2 } from 'lucide-svelte';
-  import { slide, fly, fade } from 'svelte/transition';
+  import { Trash2, CheckCircle2, History } from 'lucide-svelte';
+  import { slide, fly } from 'svelte/transition';
 
   let amountStr = '';
   let showToast = false;
   let durationMonths = 1;
+  const durationOptions = [1, 2, 3, 6, 12];
+
+  // Date Selector Logic
+  let selectedMode: 'today' | 'yesterday' | 'custom' = 'today';
+  let customDate = formatDate(new Date());
 
   $: currentAmountNum = parseFloat(amountStr) || 0;
   
@@ -14,45 +19,55 @@
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
   $: recentLogs = $transactions.slice(0, 3);
-  
-  const durationOptions = [1, 2, 3, 6, 12];
+
+  const getTargetDateStr = () => {
+    if (selectedMode === 'today') return formatDate(new Date());
+    if (selectedMode === 'yesterday') {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return formatDate(d);
+    }
+    return customDate;
+  };
 
   const handleSave = (category: string) => {
     if (currentAmountNum <= 0) return;
     
-    financeApi.addTransaction(currentAmountNum, category, durationMonths);
+    // Always use current time for entry
+    financeApi.addTransaction(currentAmountNum, category, getTargetDateStr(), formatTime(new Date()), durationMonths);
     
     amountStr = '';
     durationMonths = 1;
+    selectedMode = 'today';
     showToast = true;
     setTimeout(() => showToast = false, 1500);
   };
 
-  const undo = (id: string) => {
-    financeApi.removeTransaction(id);
-  };
 </script>
 
-<div class="flex flex-col flex-1 pb-[env(safe-area-inset-bottom)] h-full overflow-hidden">
+<div class="flex flex-col flex-1 pb-[env(safe-area-bottom)] h-full overflow-hidden">
   
-  <!-- Recent Logs -->
+  <!-- Recents w/ Exact Time -->
   <div class="px-5 py-2 h-24 overflow-hidden flex flex-col justify-end border-b border-[var(--color-dark-border)]">
     {#each recentLogs as log (log.id)}
       <div in:fly={{ y: -10, duration: 250 }} out:slide={{ duration: 200 }} class="flex justify-between items-center py-2 opacity-80 last:opacity-100">
         <div class="flex flex-col">
           <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-400 font-medium">{log.category}</span>
+            <span class="text-[11px] text-gray-400 font-bold uppercase tracking-wider">{log.category} ({log.time})</span>
             {#if log.durationMonths > 1}
-              <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-bold bg-[var(--color-dark-surface)] text-[var(--color-accent-blue)]">{log.durationMonths}mo Spread</span>
+              <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-bold bg-[var(--color-dark-surface)] text-[var(--color-accent-blue)]">{log.durationMonths}m</span>
             {/if}
           </div>
-          <span class="text-[15px] font-semibold tracking-tight text-white">
+          <span class="text-[15px] font-semibold tracking-tight text-white flex items-center gap-2">
             {formatINR(log.amount)}
+            {#if log.date !== formatDate(new Date())}
+               <span class="text-xs font-normal text-gray-500 bg-[var(--color-dark-surface)] px-1.5 rounded">{log.date}</span>
+            {/if}
           </span>
         </div>
         <button 
           class="w-8 h-8 flex items-center justify-center rounded-full bg-[var(--color-dark-surface)] text-[var(--color-accent-red)] active:scale-90 transition-transform"
-          on:click={() => undo(log.id)}
+          on:click={() => financeApi.removeTransaction(log.id)}
         >
           <Trash2 class="w-4 h-4" />
         </button>
@@ -64,10 +79,10 @@
     {/each}
   </div>
 
-  <!-- Amount Display -->
-  <div class="flex-1 flex flex-col items-center justify-center px-6 min-h-[100px] relative">
+  <!-- Amount Area -->
+  <div class="flex-1 flex flex-col items-center justify-center px-6 min-h-[90px] relative">
     {#if showToast}
-      <div transition:fly={{ y: 20, duration: 300 }} class="absolute top-[10px] flex items-center bg-[var(--color-accent-green)] text-black px-4 py-2 rounded-full font-bold text-sm shadow-[0_0_15px_rgba(48,209,88,0.3)] z-20">
+      <div transition:fly={{ y: 20, duration: 300 }} class="absolute top-[5px] flex items-center bg-[var(--color-accent-green)] text-black px-4 py-2 rounded-full font-bold text-sm shadow-[0_0_15px_rgba(48,209,88,0.3)] z-20">
         <CheckCircle2 class="w-4 h-4 mr-2" /> Saved!
       </div>
     {/if}
@@ -77,13 +92,37 @@
     </div>
   </div>
 
-  <!-- Spread / Amortization Toggle -->
-  <div class="flex flex-col gap-1 px-4 mt-2">
-    <div class="text-[11px] font-bold text-gray-500 uppercase tracking-wider pl-1">Spread Over (Months)</div>
-    <div class="flex gap-2 bg-[var(--color-dark-surface)] p-1 rounded-full border border-[var(--color-dark-border)]">
+  <!-- Configurations Ribbon (Date Picker + Spread) -->
+  <div class="flex gap-2 px-4 mt-2 mb-2 w-full max-w-full overflow-x-auto no-scrollbar">
+    <!-- Date Picker section -->
+    <div class="flex-none bg-[var(--color-dark-surface)] p-1 rounded-2xl border border-[var(--color-dark-border)] flex items-center gap-1">
+      <History class="w-4 h-4 text-gray-400 ml-2 mr-1" />
+      <button 
+        class="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-colors {selectedMode === 'today' ? 'bg-[var(--color-dark-border)] text-white' : 'text-gray-400'}"
+        on:click={() => selectedMode = 'today'}
+      >Today</button>
+      <button 
+        class="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-colors {selectedMode === 'yesterday' ? 'bg-[var(--color-dark-border)] text-white' : 'text-gray-400'}"
+        on:click={() => selectedMode = 'yesterday'}
+      >Yesterday</button>
+      <div class="relative flex items-center mr-1">
+        <input 
+          type="date" 
+          bind:value={customDate}
+          on:change={() => selectedMode = 'custom'}
+          class="w-8 h-8 opacity-0 absolute inset-0 z-10 cursor-pointer pointer-events-auto"
+        />
+        <button class="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-colors {selectedMode === 'custom' ? 'bg-[var(--color-dark-border)] text-white' : 'text-gray-400'}">
+          Pick
+        </button>
+      </div>
+    </div>
+
+    <!-- Duration Slider section -->
+    <div class="flex-none bg-[var(--color-dark-surface)] p-1 rounded-2xl border border-[var(--color-dark-border)] flex gap-1">
       {#each durationOptions as opt}
         <button 
-          class="flex-1 py-1.5 text-xs font-semibold rounded-full transition-colors {durationMonths === opt ? 'bg-[var(--color-dark-border)] text-white shadow-sm' : 'text-gray-400'}"
+          class="w-8 py-1.5 text-xs font-semibold rounded-xl transition-colors {durationMonths === opt ? 'bg-[var(--color-dark-border)] text-white' : 'text-gray-400'}"
           on:click={() => durationMonths = opt}
         >
           {opt}
@@ -93,15 +132,15 @@
   </div>
 
   <!-- Action Area -->
-  <div class="flex-none mb-2 mt-3">
-    <div class="flex overflow-x-auto no-scrollbar gap-3 pb-4 pt-1 px-4 mask-edges-horizontal touch-pan-x">
+  <div class="flex-none">
+    <div class="flex overflow-x-auto no-scrollbar gap-3 pb-3 px-4 mask-edges-horizontal touch-pan-x">
       {#each CATEGORIES as category}
         <button
           type="button"
           disabled={currentAmountNum === 0}
-          class="whitespace-nowrap px-5 py-3 rounded-full text-[15px] font-semibold transition-all duration-150 active:scale-95
-                 bg-[var(--color-dark-surface)] text-[#F2F2F7] border border-[var(--color-dark-border)]
-                 disabled:opacity-50 disabled:active:scale-100 shadow-sm"
+          class="whitespace-nowrap px-5 py-3 rounded-2xl text-[14px] font-bold tracking-tight transition-all duration-150 active:scale-95
+                 bg-[#171719] text-[#F2F2F7] border border-[var(--color-dark-border)]
+                 disabled:opacity-50 disabled:active:scale-100 shadow-xl"
           on:click={() => handleSave(category)}
         >
           {category}
