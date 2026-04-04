@@ -1,96 +1,118 @@
 <script lang="ts">
-  import { thisMonthData, weeklyHeatMapData, budgetState, CATEGORIES } from './store';
+  import { thisMonthData, weeklyHeatMapData, budgetState, categories } from './store';
   import { Wallet, Activity } from 'lucide-svelte';
 
-  const formatINR = (n: number) => 
+  const formatINR = (n: number) =>
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
-  $: derivedState = $thisMonthData;
-  $: safe = derivedState.safeToSpend;
-  $: heatmap = $weeklyHeatMapData;
-  
-  $: limitTotal = $budgetState.baseBudget > 0 ? $budgetState.baseBudget : 30000;
-  $: catLimit = limitTotal / CATEGORIES.length;
+  const derivedState = $derived($thisMonthData);
+  const safe = $derived(derivedState.safeToSpend);
+  const heatmap = $derived($weeklyHeatMapData);
 
-  $: progressData = CATEGORIES.map((cat) => {
-    const amt = derivedState.currentCategorySpending[cat] || 0;
-    const limit = catLimit;
-    const rawPct = limit === 0 ? 0 : (amt / limit) * 100;
-    const pct = Math.min(rawPct, 100);
-    return { cat, amt, limit, pct, rawPct };
-  }).sort((a, b) => b.rawPct - a.rawPct);
+  const limitTotal = $derived($budgetState.baseBudget > 0 ? $budgetState.baseBudget : 30000);
+  const catLimit = $derived(limitTotal / Math.max($categories.length, 1));
 
+  const progressData = $derived(
+    $categories
+      .map(cat => {
+        const amt = derivedState.currentCategorySpending[cat] || 0;
+        const limit = catLimit;
+        const rawPct = limit === 0 ? 0 : (amt / limit) * 100;
+        return { cat, amt, limit, pct: Math.min(rawPct, 100), rawPct };
+      })
+      .filter(r => r.amt > 0)
+      .sort((a, b) => b.rawPct - a.rawPct)
+  );
 </script>
 
 <div class="flex-1 overflow-y-auto no-scrollbar px-5 py-6 h-full pb-24">
-  
-  <!-- Safe to Spend Top Area -->
-  <div class="mb-8 flex flex-col items-center">
-    <div class="w-16 h-16 rounded-full bg-[var(--color-dark-surface)] flex items-center justify-center mb-4 border border-[var(--color-dark-border)] shadow-md">
-      <Wallet class="w-8 h-8 text-[#F2F2F7]" />
+
+  <!-- Safe to Spend -->
+  <div class="mb-8 flex flex-col items-center text-center">
+    <div class="w-14 h-14 rounded-full bg-[var(--color-dark-surface)] flex items-center justify-center mb-4 border border-[var(--color-dark-border)]">
+      <Wallet class="w-7 h-7 text-[#e4e4e7]" />
     </div>
-    <span class="text-[11px] text-gray-500 font-bold uppercase tracking-widest mb-1 text-center">Safe to Spend</span>
-    <h1 class="text-5xl font-black tracking-tight { safe < 0 ? 'text-[var(--color-accent-red)]' : 'text-white' } mb-6">
+    <span class="text-[11px] text-[var(--color-dark-muted)] font-bold uppercase tracking-widest mb-1">Safe to Spend</span>
+    <h1 class="text-5xl font-black tracking-tight mb-3 {safe < 0 ? 'text-[var(--color-accent-red)]' : 'text-white'}">
       {formatINR(safe)}
     </h1>
+
+    <!-- Breakdown pills -->
+    <div class="flex gap-3 text-xs font-semibold flex-wrap justify-center">
+      {#if derivedState.currentMonthIncome > 0}
+        <span class="px-2.5 py-1 rounded-full bg-emerald-950 text-[var(--color-income)] border border-emerald-800">
+          +{formatINR(derivedState.currentMonthIncome)} logged
+        </span>
+      {/if}
+      <span class="px-2.5 py-1 rounded-full bg-[var(--color-dark-surface)] text-[var(--color-dark-muted)] border border-[var(--color-dark-border)]">
+        Rollover {derivedState.dynamicRollover >= 0 ? '+' : ''}{formatINR(derivedState.dynamicRollover)}
+      </span>
+      <span class="px-2.5 py-1 rounded-full bg-[var(--color-dark-surface)] text-[var(--color-dark-muted)] border border-[var(--color-dark-border)]">
+        Auto-pays {formatINR(derivedState.totalAutoPays)}
+      </span>
+    </div>
   </div>
 
-  <!-- Pure CSS Weekly Heat Map -->
-  <section class="mb-8 bg-[var(--color-dark-surface)] p-5 rounded-3xl border border-[var(--color-dark-border)] shadow-sm">
-      <div class="flex items-center gap-2 mb-6">
-        <Activity class="w-4 h-4 text-gray-400" />
-        <h2 class="text-[13px] font-bold text-gray-400 uppercase tracking-wider">Weekly Heat Map</h2>
-      </div>
+  <!-- Weekly Heat Map -->
+  <section class="mb-8 bg-[var(--color-dark-surface)] p-5 rounded-3xl border border-[var(--color-dark-border)]">
+    <div class="flex items-center gap-2 mb-5">
+      <Activity class="w-4 h-4 text-[var(--color-dark-muted)]" />
+      <h2 class="text-[13px] font-bold text-[var(--color-dark-muted)] uppercase tracking-wider">This Week</h2>
+      <span class="ml-auto text-[11px] text-[var(--color-dark-muted)]">log scale</span>
+    </div>
 
-      <div class="flex justify-between items-end h-32 w-full gap-2 px-1">
-        {#each heatmap as hd}
-          <div class="flex flex-col items-center justify-end w-full h-full gap-2 relative group">
-            <!-- Tooltip -->
-            {#if hd.rawAmt > 0}
-               <div class="absolute -top-7 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap bg-black text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg pointer-events-none z-10">
-                 {formatINR(hd.rawAmt)}
-               </div>
-            {/if}
-
-            <div class="w-full flex-1 flex items-end bg-[#151516] rounded-t-sm rounded-b-sm overflow-hidden">
-               <div 
-                 class="w-full rounded-t-sm rounded-b-sm transition-all duration-700 ease-out {hd.isMax ? 'bg-[var(--color-accent-blue)] shadow-[0_-5px_15px_rgba(10,132,255,0.4)]' : 'bg-[#434346]'}"
-                 style="height: {hd.percent}%"
-               ></div>
+    <div class="flex justify-between items-end h-28 w-full gap-2">
+      {#each heatmap as hd}
+        <div class="flex flex-col items-center justify-end w-full h-full gap-1.5 relative group">
+          <!-- Hover tooltip -->
+          {#if hd.rawAmt > 0}
+            <div class="absolute -top-8 opacity-0 group-hover:opacity-100 transition-opacity
+                        whitespace-nowrap bg-zinc-800 text-white text-[10px] font-bold px-2 py-1 rounded-lg shadow-lg pointer-events-none z-10">
+              {formatINR(hd.rawAmt)}
             </div>
-            <span class="text-[10px] font-bold {hd.isMax ? 'text-white' : 'text-gray-500'}">{hd.day}</span>
+          {/if}
+
+          <div class="w-full flex-1 flex items-end bg-[var(--color-dark-elevated)] rounded-md overflow-hidden">
+            <div
+              class="w-full rounded-md transition-all duration-700 ease-out
+                     {hd.isMax
+                       ? 'bg-[var(--color-accent-blue)] shadow-[0_-4px_12px_rgba(59,130,246,0.4)]'
+                       : hd.rawAmt > 0 ? 'bg-zinc-500' : 'bg-transparent'}"
+              style="height: {Math.max(hd.percent, hd.rawAmt > 0 ? 8 : 0)}%"
+            ></div>
           </div>
-        {/each}
-      </div>
+          <span class="text-[10px] font-bold {hd.isMax ? 'text-white' : 'text-[var(--color-dark-muted)]'}">{hd.day}</span>
+        </div>
+      {/each}
+    </div>
   </section>
 
-  <!-- Categories -->
-  <h2 class="text-[13px] font-bold text-gray-400 uppercase tracking-wider mb-4 px-2">Amortized Sub-Category Spend</h2>
-  <div class="space-y-4">
+  <!-- Category Progress Bars -->
+  <h2 class="text-[13px] font-bold text-[var(--color-dark-muted)] uppercase tracking-wider mb-4 px-1">Monthly Spend by Category</h2>
+  <div class="space-y-3">
     {#each progressData as { cat, amt, limit, pct, rawPct }}
-      <div class="bg-[var(--color-dark-surface)] rounded-2xl p-4 shadow-sm border border-[var(--color-dark-border)]">
-        <div class="flex justify-between items-end mb-2">
+      <div class="bg-[var(--color-dark-surface)] rounded-2xl p-4 border border-[var(--color-dark-border)]">
+        <div class="flex justify-between items-center mb-2.5">
           <span class="font-semibold text-[15px]">{cat}</span>
-          <div class="flex flex-col items-end">
-            <span class="font-bold tracking-tight text-[15px]">{formatINR(amt)}</span>
-            <span class="text-[11px] text-gray-500 font-medium">/ {formatINR(limit)}</span>
+          <div class="text-right">
+            <span class="font-bold text-[15px]">{formatINR(amt)}</span>
+            <span class="text-[11px] text-[var(--color-dark-muted)] ml-1">/ {formatINR(limit)}</span>
           </div>
         </div>
-        
-        <div class="h-2 bg-[var(--color-dark-bg)] rounded-full overflow-hidden mt-1 relative">
-          <div 
-            class="h-full rounded-full transition-all duration-500 ease-out 
-              {rawPct > 100 ? 'bg-[var(--color-accent-red)] shadow-[0_0_8px_rgba(255,69,58,0.5)]' : 
-               rawPct > 80 ? 'bg-[var(--color-accent-yellow)] shadow-[0_0_8px_rgba(255,214,10,0.5)]' : 
-               'bg-[var(--color-accent-blue)] shadow-[0_0_8px_rgba(10,132,255,0.4)]'}"
-            style="width: {pct}%; background-color: {rawPct > 100 ? 'var(--color-accent-red)' : rawPct > 80 ? '#FFD60A' : 'var(--color-accent-blue)'}"
+
+        <div class="h-1.5 bg-[var(--color-dark-elevated)] rounded-full overflow-hidden">
+          <div
+            class="h-full rounded-full transition-all duration-500 ease-out"
+            style="width: {pct}%; background-color: {rawPct > 100
+              ? 'var(--color-accent-red)'
+              : rawPct > 80
+              ? 'var(--color-accent-yellow)'
+              : 'var(--color-accent-blue)'}"
           ></div>
         </div>
       </div>
     {:else}
-      <div class="py-10 text-center text-gray-500 font-medium text-sm">
-        Nothing calculated for this month.
-      </div>
+      <p class="py-10 text-center text-[var(--color-dark-muted)] text-sm">No variable spending logged this month.</p>
     {/each}
   </div>
 </div>
