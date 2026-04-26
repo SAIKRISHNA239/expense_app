@@ -103,30 +103,30 @@
     <h2 class="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Global Math Variables</h2>
     <div class="space-y-4">
       <div class="flex flex-col">
-        <label class="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Assumed Monthly Income</label>
+        <label for="incomeInput" class="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Assumed Monthly Income</label>
         <div class="relative group-focus-within:drop-shadow-[0_0_12px_rgba(59,130,246,0.2)] transition-shadow">
           <span class="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-          <input type="number" bind:value={incomeInput}
+          <input id="incomeInput" type="number" bind:value={incomeInput}
             class="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 focus:bg-[#0b0c10] transition-colors"
             style="touch-action: auto;" />
         </div>
       </div>
 
       <div class="flex flex-col">
-        <label class="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Budget Cap (for chart scaling)</label>
+        <label for="budgetInput" class="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Budget Cap (for chart scaling)</label>
         <div class="relative group-focus-within:drop-shadow-[0_0_12px_rgba(59,130,246,0.2)] transition-shadow">
           <span class="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-          <input type="number" bind:value={budgetInput}
+          <input id="budgetInput" type="number" bind:value={budgetInput}
             class="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 focus:bg-[#0b0c10] transition-colors"
             style="touch-action: auto;" />
         </div>
       </div>
 
       <div class="flex flex-col">
-        <label class="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Initial Rollover</label>
+        <label for="rolloverInput" class="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Initial Rollover</label>
         <div class="relative group-focus-within:drop-shadow-[0_0_12px_rgba(59,130,246,0.2)] transition-shadow">
           <span class="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-          <input type="number" bind:value={rolloverInput}
+          <input id="rolloverInput" type="number" bind:value={rolloverInput}
             class="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 focus:bg-[#0b0c10] transition-colors"
             style="touch-action: auto;" />
         </div>
