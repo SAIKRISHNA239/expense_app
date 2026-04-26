@@ -1,4 +1,5 @@
 import { writable, derived, get } from 'svelte/store';
+import Dexie, { type Table } from 'dexie';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -20,10 +21,32 @@ export type AutoPay = {
 };
 
 export type BudgetState = {
+  id?: string; // used internally by DB
   monthlyIncome: number;
   baseBudget: number;
   rolloverAmount: number;
 };
+
+// ─── DB Setup ────────────────────────────────────────────────────────────────
+
+export class ExpenseAppDB extends Dexie {
+  transactions!: Table<Transaction, string>;
+  autoPays!: Table<AutoPay, string>;
+  categories!: Table<{ name: string }, string>;
+  budgetState!: Table<BudgetState, string>;
+  
+  constructor() {
+    super('ExpenseAppDB');
+    this.version(1).stores({
+      transactions: 'id, date, category',
+      autoPays: 'id',
+      categories: 'name',
+      budgetState: 'id'
+    });
+  }
+}
+
+export const db = new ExpenseAppDB();
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -62,53 +85,93 @@ export const formatDate = (d: Date): string =>
 
 const getYM = (dateStr: string) => dateStr.substring(0, 7);
 
-// ─── Storage Helpers ─────────────────────────────────────────────────────────
+// ─── Stores ──────────────────────────────────────────────────────────────────
 
-const loadStorage = <T>(key: string, defaultValue: T): T => {
-  if (typeof window === 'undefined') return defaultValue;
-  try {
-    const val = localStorage.getItem(key);
-    if (!val) return defaultValue;
-    const data = JSON.parse(val);
+// We start with raw empty bounds so the app mounts fast without blocking.
+// Once Dexie hydrates, they populate.
+export const transactions = writable<Transaction[]>([]);
+export const autoPays = writable<AutoPay[]>([]);
+export const budgetState = writable<BudgetState>({ monthlyIncome: 0, baseBudget: 0, rolloverAmount: 0 });
+export const categories = writable<string[]>(DEFAULT_CATEGORIES);
 
-    // V3→V4 migration: ISO date → split date+time
-    if (key === STORAGE_KEYS.transactions && Array.isArray(data)) {
-      return data.map((tx: any) => {
+// ─── Dexie Migration & Hydration ─────────────────────────────────────────────
+
+export const initDbAndMigrate = async () => {
+  if (typeof window === 'undefined') return;
+
+  // Migration from localStorage
+  const oldTxData = localStorage.getItem(STORAGE_KEYS.transactions);
+  
+  if (oldTxData) {
+    try {
+      console.log('Migrating legacy localStorage to Dexie...');
+      
+      const parsedTxs = JSON.parse(oldTxData) || [];
+      const parsedAP = JSON.parse(localStorage.getItem(STORAGE_KEYS.autoPays) || '[]');
+      const parsedBudget = JSON.parse(localStorage.getItem(STORAGE_KEYS.budget) || '{}');
+      const parsedCat = JSON.parse(localStorage.getItem(STORAGE_KEYS.categories) || 'null');
+      
+      // V3->V4 format check handled inside migration
+      const finalTxs = parsedTxs.map((tx: any) => {
         if (typeof tx.date === 'string' && tx.date.includes('T') && !tx.time) {
           const d = new Date(tx.date);
           return { ...tx, date: formatDate(d), time: formatTime(d) };
         }
         return tx;
-      }) as unknown as T;
+      });
+
+      // Insert all elements into Dexie safely
+      if (finalTxs.length) await db.transactions.bulkPut(finalTxs);
+      if (parsedAP.length) await db.autoPays.bulkPut(parsedAP);
+      
+      const catsToInsert = parsedCat || DEFAULT_CATEGORIES;
+      await db.categories.bulkPut(catsToInsert.map((c: string) => ({ name: c })));
+      
+      // We'll store budgetState with a hardcoded id "singleton"
+      await db.budgetState.put({ ...parsedBudget, id: 'singleton' });
+
+      // Clean up localStorage to prevent re-migration
+      Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+      console.log('Migration complete. Purged legacy localStorage.');
+    } catch (e) {
+      console.error('Migration failed:', e);
     }
-    return data;
-  } catch {
-    return defaultValue;
   }
+
+  // Hydrate exact state from Dexie to Svelte stores
+  const dbTxs = await db.transactions.orderBy('date').reverse().toArray();
+  // secondary sort by time in memory
+  dbTxs.sort((a, b) => {
+      const da = new Date(`${a.date} ${a.time || '12:00 AM'}`).getTime();
+      const db = new Date(`${b.date} ${b.time || '12:00 AM'}`).getTime();
+      return db - da;
+  });
+  transactions.set(dbTxs);
+
+  const dbAPs = await db.autoPays.toArray();
+  autoPays.set(dbAPs);
+
+  const dbCats = await db.categories.toArray();
+  if (dbCats.length > 0) {
+    categories.set(dbCats.map(c => c.name));
+  } else {
+    // initialize default
+    await db.categories.bulkPut(DEFAULT_CATEGORIES.map(name => ({name})));
+  }
+
+  const dbBudget = await db.budgetState.get('singleton');
+  if (dbBudget) {
+    budgetState.set({ monthlyIncome: dbBudget.monthlyIncome || 0, baseBudget: dbBudget.baseBudget || 0, rolloverAmount: dbBudget.rolloverAmount || 0 });
+  }
+
+  runAutoBilling(); // Check for fresh autopays once state is alive!
 };
 
-const saveStorage = (key: string, value: unknown) => {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(key, JSON.stringify(value));
-  }
-};
+// Start hydration cycle on boot
+if (typeof window !== 'undefined') {
+  initDbAndMigrate();
+}
 
-// ─── Stores ──────────────────────────────────────────────────────────────────
-
-export const transactions = writable<Transaction[]>(loadStorage(STORAGE_KEYS.transactions, []));
-export const autoPays = writable<AutoPay[]>(loadStorage(STORAGE_KEYS.autoPays, []));
-export const budgetState = writable<BudgetState>(
-  loadStorage(STORAGE_KEYS.budget, { monthlyIncome: 0, baseBudget: 0, rolloverAmount: 0 })
-);
-export const categories = writable<string[]>(
-  loadStorage(STORAGE_KEYS.categories, DEFAULT_CATEGORIES)
-);
-
-// Persist
-transactions.subscribe(v => saveStorage(STORAGE_KEYS.transactions, v));
-autoPays.subscribe(v => saveStorage(STORAGE_KEYS.autoPays, v));
-budgetState.subscribe(v => saveStorage(STORAGE_KEYS.budget, v));
-categories.subscribe(v => saveStorage(STORAGE_KEYS.categories, v));
 
 // ─── Derived: Monthly Dashboard ───────────────────────────────────────────────
 
@@ -118,7 +181,6 @@ export const thisMonthData = derived(
     const now = new Date();
     const currentYM = getYM(formatDate(now));
 
-    // Find earliest date to build rollover history
     let earliestDate = now;
     $txs.forEach(tx => {
       const d = new Date(tx.date || Date.now());
@@ -137,7 +199,7 @@ export const thisMonthData = derived(
     activeMonths.forEach(m => (pastAmortized[m] = 0));
 
     let currentAmortizedBurden = 0;
-    let currentMonthIncome = 0; // dynamic income from Income transactions THIS month
+    let currentMonthIncome = 0;
     const currentCategorySpending: Record<string, number> = {};
     $cats.forEach(c => (currentCategorySpending[c] = 0));
 
@@ -150,10 +212,9 @@ export const thisMonthData = derived(
     }
 
     $txs.forEach(tx => {
-      // Dynamic income: count Income transactions this month
       if (tx.isIncome || tx.category === INCOME_CATEGORY) {
         if (getYM(tx.date) === currentYM) currentMonthIncome += tx.amount;
-        return; // Income doesn't count as a burden
+        return; 
       }
       if (tx.category === AUTO_PAY_CATEGORY) return;
 
@@ -194,7 +255,6 @@ export const thisMonthData = derived(
     const dynamicRollover =
       $budgetState.rolloverAmount + totalHistoricalIncome - pastVariableBurden - pastAutoPayBurden;
 
-    // Safe = static income + dynamic (logged) income + rollover - autopays - variable burden
     const effectiveIncome = $budgetState.monthlyIncome + currentMonthIncome;
     const safeToSpend = effectiveIncome + dynamicRollover - totalCurrentAutoPays - currentAmortizedBurden;
 
@@ -213,7 +273,7 @@ export const thisMonthData = derived(
 
 // ─── Auto-Billing ────────────────────────────────────────────────────────────
 
-export const runAutoBilling = () => {
+export const runAutoBilling = async () => {
   if (typeof window === 'undefined') return;
   const now = new Date();
   const currentYM = getYM(formatDate(now));
@@ -262,9 +322,14 @@ export const runAutoBilling = () => {
   });
 
   if (toAdd.length > 0) {
+    await db.transactions.bulkPut(toAdd);
     transactions.update(existing => {
       const merged = [...toAdd, ...existing];
-      merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      merged.sort((a, b) => {
+        const da = new Date(`${a.date} ${a.time || '12:00 AM'}`).getTime();
+        const db = new Date(`${b.date} ${b.time || '12:00 AM'}`).getTime();
+        return db - da;
+      });
       return merged;
     });
   }
@@ -273,7 +338,7 @@ export const runAutoBilling = () => {
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export const financeApi = {
-  addTransaction: (
+  addTransaction: async (
     amount: number,
     category: string,
     dateStr: string,
@@ -281,8 +346,11 @@ export const financeApi = {
     durationMonths: number = 1
   ) => {
     const isIncome = category === INCOME_CATEGORY;
+    const newTx: Transaction = { id: Date.now().toString(), amount, category, date: dateStr, time: timeStr, durationMonths, isIncome };
+    
+    await db.transactions.put(newTx);
+    
     transactions.update(txs => {
-      const newTx: Transaction = { id: Date.now().toString(), amount, category, date: dateStr, time: timeStr, durationMonths, isIncome };
       const updated = [newTx, ...txs];
       updated.sort((a, b) => {
         const da = new Date(`${a.date} ${a.time || '12:00 AM'}`).getTime();
@@ -293,81 +361,91 @@ export const financeApi = {
     });
   },
 
-  removeTransaction: (id: string) => {
+  removeTransaction: async (id: string) => {
+    await db.transactions.delete(id);
     transactions.update(txs => txs.filter(t => t.id !== id));
   },
 
-  addAutoPay: (name: string, amount: number, billingDay: number) => {
-    autoPays.update(aps => [...aps, { id: Date.now().toString(), name, amount, billingDay }]);
+  addAutoPay: async (name: string, amount: number, billingDay: number) => {
+    const ap: AutoPay = { id: Date.now().toString(), name, amount, billingDay };
+    await db.autoPays.put(ap);
+    autoPays.update(aps => [...aps, ap]);
     runAutoBilling();
   },
 
-  removeAutoPay: (id: string) => {
+  removeAutoPay: async (id: string) => {
+    await db.autoPays.delete(id);
     autoPays.update(aps => aps.filter(ap => ap.id !== id));
   },
 
-  updateBudget: (monthlyIncome: number, baseBudget: number, rolloverAmount: number) => {
+  updateBudget: async (monthlyIncome: number, baseBudget: number, rolloverAmount: number) => {
+    const data = { id: 'singleton', monthlyIncome, baseBudget, rolloverAmount };
+    await db.budgetState.put(data);
     budgetState.set({ monthlyIncome, baseBudget, rolloverAmount });
   },
 
-  addCategory: (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return false;
-    const current = get(categories);
-    if (current.includes(trimmed)) return false;
-    categories.update(cats => [...cats, trimmed]);
+  addCategory: async (name: string) => {
+    const cats = get(categories);
+    if (!name.trim() || cats.includes(name.trim())) return false;
+    
+    await db.categories.put({ name: name.trim() });
+    categories.update(c => [...c, name.trim()]);
     return true;
   },
 
-  removeCategory: (name: string, fallbackCategory?: string) => {
-    if (fallbackCategory) {
-      transactions.update(txs => txs.map(t => t.category === name ? { ...t, category: fallbackCategory } : t));
+  removeCategory: async (name: string, fallbackCategory?: string) => {
+    const defaultFallback = fallbackCategory || 'Misc';
+    
+    await db.categories.delete(name);
+    categories.update(c => c.filter(cat => cat !== name));
+
+    const txsToUpdate = get(transactions).filter(tx => tx.category === name);
+    if (txsToUpdate.length > 0) {
+      const updatedTxs = txsToUpdate.map(tx => ({ ...tx, category: defaultFallback }));
+      await db.transactions.bulkPut(updatedTxs);
+      
+      transactions.update(txs => {
+        return txs.map(tx => tx.category === name ? { ...tx, category: defaultFallback } : tx);
+      });
     }
-    categories.update(cats => cats.filter(c => c !== name));
+  },
+
+  factoryReset: async () => {
+    await db.delete();
+    Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+    window.location.reload();
   },
 
   exportData: () => {
     const data = {
       transactions: get(transactions),
       autoPays: get(autoPays),
-      budgetState: get(budgetState),
+      budget: get(budgetState),
       categories: get(categories),
+      version: 4
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    const u = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `zff-v5-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.href = u;
+    a.download = `zff_backup_${new Date().getTime()}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   },
 
-  importData: (jsonStr: string): boolean => {
+  importData: async (jsonStr: string) => {
     try {
       const data = JSON.parse(jsonStr);
-      if (data.transactions) transactions.set(data.transactions);
-      if (data.autoPays) autoPays.set(data.autoPays);
-      if (data.budgetState) budgetState.set(data.budgetState);
-      if (data.categories) categories.set(data.categories);
+      if (data.transactions) await db.transactions.bulkPut(data.transactions);
+      if (data.autoPays) await db.autoPays.bulkPut(data.autoPays);
+      if (data.categories) await db.categories.bulkPut(data.categories.map((name: string) => ({ name })));
+      if (data.budget) await db.budgetState.put({ ...data.budget, id: 'singleton' });
+      
+      await initDbAndMigrate();
       return true;
     } catch {
       return false;
     }
-  },
-
-  factoryReset: () => {
-    localStorage.removeItem(STORAGE_KEYS.transactions);
-    localStorage.removeItem(STORAGE_KEYS.autoPays);
-    localStorage.removeItem(STORAGE_KEYS.budget);
-    localStorage.removeItem(STORAGE_KEYS.categories);
-    transactions.set([]);
-    autoPays.set([]);
-    budgetState.set({ monthlyIncome: 0, baseBudget: 0, rolloverAmount: 0 });
-    categories.set(['Diet', 'Snacks/Chai', 'Gym & Supplements', 'Travel', 'Outside Food', 'Shopping', 'Misc']);
-  },
+  }
 };
-
-// Auto-bill on boot
-if (typeof window !== 'undefined') {
-  setTimeout(runAutoBilling, 500);
-}

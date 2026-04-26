@@ -41,9 +41,9 @@
     apDay = '1';
   };
 
-  const handleAddCategory = () => {
+  const handleAddCategory = async () => {
     catError = '';
-    const ok = financeApi.addCategory(newCategory);
+    const ok = await financeApi.addCategory(newCategory);
     if (ok) {
       newCategory = '';
     } else {
@@ -56,9 +56,9 @@
     const file = target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => {
+    reader.onload = async ev => {
       const content = ev.target?.result as string;
-      const ok = financeApi.importData(content);
+      const ok = await financeApi.importData(content);
       alert(ok ? 'Import successful!' : 'Failed — invalid format.');
     };
     reader.readAsText(file);
