@@ -17,18 +17,21 @@
   };
 </script>
 
-<div class="grid grid-cols-3 gap-2 p-4 bg-[var(--color-dark-surface)] rounded-t-3xl shadow-2xl pb-8 select-none touch-none">
+<div class="grid grid-cols-3 gap-2 px-5 pt-4 pb-32 bg-[#0b0c10]/95 backdrop-blur-3xl rounded-t-[2.5rem] shadow-[0_-8px_40px_rgba(0,0,0,0.5)] border-t border-white/5 select-none touch-none relative z-20">
+  <!-- Subtle glowing underlay for numpad -->
+  <div class="absolute inset-0 bg-gradient-to-t from-blue-500/5 to-transparent pointer-events-none rounded-t-[2.5rem]"></div>
+
   {#each keys as key}
     <button
       type="button"
-      class="h-[58px] flex items-center justify-center text-3xl font-medium rounded-2xl
-             bg-[var(--color-dark-elevated)] text-[#e4e4e7]
-             active:bg-[var(--color-dark-border)] active:scale-95 transition-all duration-75
-             border border-[var(--color-dark-border)] shadow-sm"
+      class="h-[64px] flex items-center justify-center text-[32px] font-medium rounded-[1.2rem] relative overflow-hidden group
+             bg-transparent text-white
+             active:scale-[0.92] transition-all duration-75
+             border border-transparent active:border-white/10 active:bg-white/10 border-white/5 shadow-inner"
       onclick={() => handlePress(key)}
     >
       {#if key === 'delete'}
-        <Delete class="w-7 h-7 text-[#e4e4e7]" />
+        <Delete class="w-8 h-8 text-zinc-400 group-active:text-white transition-colors" />
       {:else}
         {key}
       {/if}

@@ -210,58 +210,6 @@ export const thisMonthData = derived(
   }
 );
 
-// ─── Derived: Weekly Heat Map (Log Scale) ─────────────────────────────────────
-
-export const weeklyHeatMapData = derived(transactions, $txs => {
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const displayDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-  const now = new Date();
-  const dayOfWeek = now.getDay();
-  const distanceToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - distanceToMonday);
-  monday.setHours(0, 0, 0, 0);
-
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  sunday.setHours(23, 59, 59, 999);
-
-  const weekTotals: Record<string, number> = {};
-  displayDays.forEach(d => (weekTotals[d] = 0));
-
-  $txs.forEach(tx => {
-    const dateObj = new Date(tx.date);
-    if (
-      dateObj >= monday &&
-      dateObj <= sunday &&
-      tx.category !== AUTO_PAY_CATEGORY &&
-      tx.category !== INCOME_CATEGORY &&
-      !tx.isIncome
-    ) {
-      const dayName = days[dateObj.getDay()];
-      weekTotals[dayName] = (weekTotals[dayName] || 0) + tx.amount;
-    }
-  });
-
-  const rawValues = Object.values(weekTotals);
-  const maxSpend = Math.max(...rawValues, 1);
-
-  // Log scale: log(1 + amount) / log(1 + max) — keeps small bars visible
-  const logMax = Math.log1p(maxSpend);
-
-  return displayDays.map(day => {
-    const rawAmt = weekTotals[day];
-    const logPercent = logMax > 0 ? (Math.log1p(rawAmt) / logMax) * 100 : 0;
-    return {
-      day,
-      rawAmt,
-      percent: Math.min(logPercent, 100),
-      isMax: rawAmt === maxSpend && maxSpend > 0,
-    };
-  });
-});
 
 // ─── Auto-Billing ────────────────────────────────────────────────────────────
 

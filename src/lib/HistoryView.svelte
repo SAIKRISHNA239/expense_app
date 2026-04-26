@@ -50,47 +50,51 @@
   });
 </script>
 
-<div class="flex-1 overflow-y-auto no-scrollbar h-full pb-24">
+<div class="flex-1 overflow-y-auto no-scrollbar h-full pb-32">
 
   <!-- Header -->
-  <div class="px-5 pt-6 pb-4 border-b border-[var(--color-dark-border)] sticky top-0 bg-[var(--color-dark-bg)] z-10">
-    <h1 class="text-2xl font-black tracking-tight text-white">Transaction History</h1>
-    <p class="text-[13px] text-[var(--color-dark-muted)] font-medium mt-0.5">{$transactions.length} entries</p>
+  <div class="px-5 pt-8 pb-4 border-b border-white/5 sticky top-0 bg-[#0b0c10]/90 backdrop-blur-xl z-10 shadow-sm">
+    <h1 class="text-[28px] font-black tracking-tighter text-white">Transaction History</h1>
+    <p class="text-[12px] text-zinc-500 font-bold tracking-widest uppercase mt-1">{$transactions.length} entries recorded</p>
   </div>
 
   {#if $transactions.length === 0}
-    <div class="flex flex-col items-center justify-center h-64 text-[var(--color-dark-muted)]">
-      <p class="text-lg font-semibold">No transactions yet</p>
-      <p class="text-sm mt-1">Log an expense to see it here.</p>
+    <div class="flex flex-col items-center justify-center h-64 text-zinc-500">
+      <div class="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4 border border-white/10 shadow-inner">
+        <TrendingDown class="w-8 h-8 opacity-50" />
+      </div>
+      <p class="text-lg font-bold text-zinc-400">No transactions yet</p>
+      <p class="text-xs mt-1 font-medium">Log an expense to see it here.</p>
     </div>
   {:else}
     {#each grouped() as mg (mg.ym)}
       <!-- Month Header -->
-      <div class="px-5 pt-6 pb-2 flex items-center justify-between">
-        <h2 class="text-[15px] font-black text-white tracking-tight">{mg.label}</h2>
-        <div class="flex gap-3 text-[12px] font-semibold">
+      <div class="px-5 pt-8 pb-3 flex items-center justify-between">
+        <h2 class="text-[18px] font-black text-white tracking-tight">{mg.label}</h2>
+        <div class="flex gap-3 text-[12px] font-bold">
           {#if mg.income > 0}
-            <span class="text-[var(--color-income)]">+{formatINR(mg.income)}</span>
+            <span class="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20 shadow-inner">+{formatINR(mg.income)} IN</span>
           {/if}
-          <span class="text-[var(--color-dark-muted)]">{formatINR(mg.total)}</span>
+          <span class="text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md border border-rose-500/20 shadow-inner">-{formatINR(mg.total)} OUT</span>
         </div>
       </div>
 
       {#each mg.days as dg (dg.date)}
         <!-- Day Label -->
-        <div class="px-5 py-2">
-          <span class="text-[11px] font-bold text-[var(--color-dark-muted)] uppercase tracking-wider">{dg.label}</span>
+        <div class="px-5 py-2 mt-2">
+          <span class="text-[11px] font-bold text-zinc-500 uppercase tracking-[0.15em] relative before:absolute before:inset-y-1/2 before:left-full before:ml-3 before:w-12 before:h-px before:bg-white/10">{dg.label}</span>
         </div>
 
         <!-- Transactions -->
-        <div class="mx-4 mb-3 bg-[var(--color-dark-surface)] rounded-2xl border border-[var(--color-dark-border)] overflow-hidden divide-y divide-[var(--color-dark-border)]">
+        <div class="mx-5 mb-6 bg-[#111216]/80 backdrop-blur-md rounded-[1.5rem] border border-zinc-800/80 shadow-xl overflow-hidden divide-y divide-white/5 relative group">
+          <div class="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none -z-10"></div>
           {#each dg.txs as tx (tx.id)}
             {@const isInc = tx.isIncome || tx.category === INCOME_CATEGORY}
             {@const isAP = tx.category === AUTO_PAY_CATEGORY}
-            <div class="flex items-center gap-3 px-4 py-3">
+            <div class="flex items-center gap-4 px-4 py-3.5 hover:bg-white/5 transition-colors">
               <!-- Icon -->
-              <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0
-                          {isInc ? 'bg-emerald-950 text-[var(--color-income)]' : 'bg-[var(--color-dark-elevated)] text-[var(--color-dark-muted)]'}">
+              <div class="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 border shadow-inner
+                          {isInc ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-white/5 text-zinc-400 border-white/10'}">
                 {#if isInc}
                   <TrendingUp class="w-4 h-4" />
                 {:else}
@@ -100,8 +104,8 @@
 
               <!-- Info -->
               <div class="flex-1 min-w-0">
-                <p class="font-semibold text-[14px] text-white truncate">{tx.category}</p>
-                <p class="text-[11px] text-[var(--color-dark-muted)] font-medium">
+                <p class="font-bold text-[14px] text-zinc-200 tracking-tight truncate">{tx.category}</p>
+                <p class="text-[11px] text-zinc-500 font-semibold mt-0.5 tracking-wide">
                   {tx.time}
                   {#if tx.durationMonths > 1}
                     · <span class="text-[var(--color-accent-blue)]">{tx.durationMonths}-month spread</span>
@@ -113,16 +117,16 @@
               </div>
 
               <!-- Amount -->
-              <div class="flex items-center gap-2 flex-shrink-0">
-                <span class="font-bold text-[15px] tabular-nums {isInc ? 'text-[var(--color-income)]' : 'text-white'}">
+              <div class="flex items-center gap-3 flex-shrink-0">
+                <span class="font-black text-[15px] tabular-nums tracking-tight {isInc ? 'text-emerald-400' : 'text-zinc-100'}">
                   {isInc ? '+' : ''}{formatINR(tx.amount)}
                 </span>
                 <button
-                  class="w-7 h-7 flex items-center justify-center rounded-full text-[var(--color-accent-red)] active:scale-90 transition-transform"
+                  class="w-7 h-7 flex items-center justify-center rounded-full text-zinc-600 hover:text-rose-500 hover:bg-rose-500/10 active:scale-90 transition-all"
                   onclick={() => financeApi.removeTransaction(tx.id)}
                   aria-label="Delete transaction"
                 >
-                  <Trash2 class="w-3.5 h-3.5" />
+                  <Trash2 class="w-4 h-4" />
                 </button>
               </div>
             </div>

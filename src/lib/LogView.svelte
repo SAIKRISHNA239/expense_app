@@ -42,87 +42,92 @@
 <div class="flex flex-col flex-1 h-full overflow-hidden">
 
   <!-- Recents -->
-  <div class="px-5 py-2 h-[92px] overflow-hidden flex flex-col justify-end border-b border-[var(--color-dark-border)]">
+  <div class="px-5 pt-8 pb-3 h-[110px] overflow-hidden flex flex-col justify-end relative">
+    <!-- Fade top -->
+    <div class="absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[var(--color-dark-bg)] to-transparent z-10 pointer-events-none"></div>
+    <div class="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
+
     {#each recentLogs as log (log.id)}
       <div in:fly={{ y: -10, duration: 250 }} out:slide={{ duration: 200 }}
-        class="flex justify-between items-center py-1.5 opacity-70 last:opacity-100">
+        class="flex justify-between items-center py-2 opacity-70 last:opacity-100 hover:opacity-100 transition-opacity">
         <div class="flex flex-col">
           <div class="flex items-center gap-2">
-            <span class="text-[11px] {log.isIncome ? 'text-[var(--color-income)]' : 'text-[var(--color-dark-muted)]'} font-bold uppercase tracking-wider">
+            <span class="text-[10px] {log.isIncome ? 'text-emerald-400' : 'text-zinc-500'} font-black uppercase tracking-[0.15em]">
               {log.category} · {log.time}
             </span>
             {#if log.durationMonths > 1}
-              <span class="px-1.5 rounded text-[10px] bg-[var(--color-dark-elevated)] text-[var(--color-accent-blue)] font-bold">{log.durationMonths}m</span>
+              <span class="px-1.5 rounded-sm text-[9px] bg-blue-500/10 text-blue-400 font-bold tracking-widest">{log.durationMonths}M</span>
             {/if}
           </div>
-          <span class="text-[15px] font-semibold {log.isIncome ? 'text-[var(--color-income)]' : 'text-white'} flex items-center gap-2">
+          <span class="text-[16px] font-black tracking-tight {log.isIncome ? 'text-emerald-400' : 'text-white'} flex items-center gap-2">
             {log.isIncome ? '+' : ''}{formatINR(log.amount)}
             {#if log.date !== formatDate(new Date())}
-              <span class="text-[11px] font-normal text-[var(--color-dark-muted)] bg-[var(--color-dark-elevated)] px-1.5 rounded">{log.date}</span>
+              <span class="text-[10px] font-bold text-zinc-500 bg-white/5 border border-white/5 px-2 py-0.5 rounded-full">{log.date}</span>
             {/if}
           </span>
         </div>
         <button
-          class="w-8 h-8 flex items-center justify-center rounded-full bg-[var(--color-dark-elevated)] text-[var(--color-accent-red)] active:scale-90 transition-transform"
+          class="w-8 h-8 flex items-center justify-center rounded-xl bg-white/5 border border-white/5 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/10 active:scale-90 transition-all"
           onclick={() => financeApi.removeTransaction(log.id)}
         >
           <Trash2 class="w-4 h-4" />
         </button>
       </div>
     {:else}
-      <p class="h-full flex items-center justify-center text-sm text-[var(--color-dark-muted)] font-medium">No recent entries</p>
+      <p class="h-full flex items-center justify-center text-xs text-zinc-600 font-bold tracking-widest uppercase">No recent entries</p>
     {/each}
   </div>
 
   <!-- Amount display -->
-  <div class="flex-1 flex flex-col items-center justify-center px-6 min-h-[80px] relative">
+  <div class="flex-1 flex flex-col items-center justify-center px-6 min-h-[120px] relative">
+    <div class="absolute inset-0 bg-gradient-to-b from-blue-500/5 to-transparent pointer-events-none -z-10"></div>
     {#if showToast}
       <div transition:fly={{ y: 20, duration: 300 }}
-        class="absolute top-2 flex items-center bg-[var(--color-accent-green)] text-black px-4 py-2 rounded-full font-bold text-sm shadow-[0_0_15px_rgba(34,197,94,0.35)] z-20">
-        <CheckCircle2 class="w-4 h-4 mr-2" /> Saved!
+        class="absolute top-2 flex items-center bg-emerald-500/20 border border-emerald-500/50 backdrop-blur-md text-emerald-400 px-5 py-2 rounded-full font-bold text-[13px] shadow-[0_0_24px_rgba(52,211,153,0.4)] z-20">
+        <CheckCircle2 class="w-4 h-4 mr-2" /> Logged Successfully
       </div>
     {/if}
-    <div class="text-[var(--color-accent-blue)] text-2xl font-semibold mb-1 transition-opacity {amountStr ? 'opacity-100' : 'opacity-30'}">₹</div>
-    <div class="text-6xl font-black tracking-tighter text-white truncate w-full text-center tabular-nums">
+    <div class="text-blue-500 text-3xl font-bold mb-0 transition-opacity {amountStr ? 'opacity-100' : 'opacity-30'} shadow-blue-500/50">₹</div>
+    <div class="text-[72px] leading-[1] font-black tracking-tighter text-white truncate w-full text-center tabular-nums drop-shadow-[0_8px_24px_rgba(255,255,255,0.15)]">
       {amountStr || '0'}
     </div>
   </div>
 
   <!-- Config ribbon: date picker + spread -->
-  <div class="flex gap-2 px-4 mb-2 w-full overflow-x-auto no-scrollbar">
+  <div class="flex gap-2.5 px-5 mb-4 w-full overflow-x-auto no-scrollbar relative z-10">
     <!-- Date picker -->
-    <div class="flex-none bg-[var(--color-dark-surface)] p-1 rounded-xl border border-[var(--color-dark-border)] flex items-center gap-1">
-      <History class="w-3.5 h-3.5 text-[var(--color-dark-muted)] ml-2 mr-0.5" />
+    <div class="flex-none bg-[#111216]/60 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 flex items-center gap-1 shadow-inner">
+      <History class="w-4 h-4 text-zinc-500 ml-2 mr-1" />
       {#each (['today', 'yesterday'] as const) as mode}
         <button
-          class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg transition-colors capitalize
-                 {selectedMode === mode ? 'bg-[var(--color-dark-border)] text-white' : 'text-[var(--color-dark-muted)]'}"
+          class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] rounded-xl transition-all duration-300
+                 {selectedMode === mode ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-zinc-500 hover:text-zinc-400'}"
           onclick={() => selectedMode = mode}
         >
-          {mode === 'today' ? 'Today' : 'Yest.'}
+          {mode === 'today' ? 'Today' : 'Yest'}
         </button>
       {/each}
-      <div class="relative flex items-center mr-1">
+      <div class="relative flex items-center mr-1 ml-1">
         <input
           type="date"
           bind:value={customDate}
           onchange={() => (selectedMode = 'custom')}
-          class="w-8 h-8 opacity-0 absolute inset-0 z-10 cursor-pointer"
+          class="w-10 h-10 opacity-0 absolute inset-0 z-10 cursor-pointer"
           style="touch-action: auto;"
         />
-        <button class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg transition-colors
-                       {selectedMode === 'custom' ? 'bg-[var(--color-dark-border)] text-white' : 'text-[var(--color-dark-muted)]'}">
-          Pick
+        <button class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] rounded-xl transition-all duration-300
+                       {selectedMode === 'custom' ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-zinc-500 hover:text-zinc-400'}">
+          Custom
         </button>
       </div>
     </div>
 
     <!-- Spread -->
-    <div class="flex-none bg-[var(--color-dark-surface)] p-1 rounded-xl border border-[var(--color-dark-border)] flex gap-1">
+    <div class="flex-none bg-[#111216]/60 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 flex gap-1 shadow-inner">
       {#each durationOptions as opt}
         <button
-          class="w-8 py-1 text-xs font-semibold rounded-lg transition-colors
-                 {durationMonths === opt ? 'bg-[var(--color-dark-border)] text-white' : 'text-[var(--color-dark-muted)]'}"
+          class="w-9 py-1.5 text-[12px] font-black rounded-xl transition-all duration-300
+                 {durationMonths === opt ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-zinc-500 hover:text-zinc-400'}"
           onclick={() => (durationMonths = opt)}
         >
           {opt}
@@ -132,29 +137,31 @@
   </div>
 
   <!-- Category 3-column Grid + Income chip -->
-  <div class="flex-none px-4 pb-2">
-    <!-- Income chip – full width so it stands out -->
+  <div class="flex-none px-5 pb-4 relative z-10">
+    <!-- Income chip -->
     <button
       disabled={currentAmountNum === 0}
-      class="w-full mb-2 py-2.5 rounded-2xl text-[14px] font-bold tracking-tight transition-all duration-150 active:scale-95
-             flex items-center justify-center gap-2
-             bg-emerald-950 text-[var(--color-income)] border border-emerald-800
-             disabled:opacity-40 disabled:active:scale-100"
+      class="w-full mb-3 py-3.5 rounded-[1.2rem] text-[13px] font-black tracking-[0.15em] uppercase transition-all duration-300 active:scale-[0.98]
+             flex items-center justify-center gap-2 relative overflow-hidden group
+             bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-inner
+             disabled:opacity-30 disabled:active:scale-100 disabled:grayscale"
       onclick={() => handleSave(INCOME_CATEGORY)}
     >
-      <TrendingUp class="w-4 h-4" />
-      Add Income
+      <div class="absolute inset-0 bg-gradient-to-r from-emerald-400/0 via-emerald-400/10 to-emerald-400/0 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></div>
+      <TrendingUp class="w-5 h-5" />
+      Log Income
     </button>
 
     <!-- Regular categories in 3-col grid -->
-    <div class="grid grid-cols-3 gap-2">
+    <div class="grid grid-cols-3 gap-2.5">
       {#each $categories as category}
         <button
           type="button"
           disabled={currentAmountNum === 0}
-          class="py-3 rounded-2xl text-[13px] font-bold tracking-tight transition-all duration-150 active:scale-95
-                 bg-[var(--color-dark-elevated)] text-[#e4e4e7] border border-[var(--color-dark-border)]
-                 disabled:opacity-40 disabled:active:scale-100"
+          class="py-3.5 px-1 rounded-[1rem] text-[12px] font-bold tracking-tight transition-all duration-200 active:scale-95
+                 bg-white/5 text-zinc-300 border border-white/5 shadow-inner relative overflow-hidden
+                 disabled:opacity-30 disabled:active:scale-100
+                 hover:bg-white/10 hover:text-white hover:border-white/20"
           onclick={() => handleSave(category)}
         >
           {category}
