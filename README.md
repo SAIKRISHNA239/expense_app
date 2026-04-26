@@ -1,47 +1,79 @@
-# Svelte + TS + Vite
+# Premium Expense Manager (Fintech Grade)
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+A highly polished, privacy-first personal finance application modeled after premium fintech experiences. Designed completely offline-first, this app utilizes **IndexedDB (Dexie.js)** to handle vast, multi-year transaction data arrays instantaneously while syncing beautifully smoothly up to **Svelte 5** reactive elements.
 
-## Recommended IDE Setup
+## 🚀 Features
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+### 1. The "Safe to Spend" Engine
+Unlike traditional budgeting apps that just track expenses against an arbitrary limit, this app dynamically calculates your actual "guilt-free" spending capacity in real time based on:
+- **Assumed Monthly Income**
+- **Rollover Surplus/Deficit** from historical performance
+- **Upcoming Auto-Pays** guaranteed to occur this month
+- **Amortized Variable Spends** spread continuously across several months
 
-## Need an official Svelte framework?
+### 2. High-End Glassmorphism Aesthetics
+We stripped back standard boundaries. The visual language relies heavily on iOS-inspired transparent materials:
+- **Floating Navigation Capsule:** Drop-shadow pill layout with micro-animations.
+- **Glass Numpad:** Boundary-free input system wrapping massive typography and inner glowing keys.
+- **Mesh Gradients:** Subtle backlights matching transaction states (Income = Emerald, Expenses = Rose) nested beneath `<nav>` modules and dashboard headers.
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+### 3. Expense Spreading (Amortization)
+Buy an Annual VPN for ₹6,000? Log it with a **12-month spread**. The engine dynamically splits the burden into ₹500 chunks internally distributed throughout the following 12 months, preventing massive single-day purchases from instantly destroying your current month's "Safe to Spend" budget psychologically.
 
-## Technical considerations
+### 4. Background Auto-Billing
+Declare an "Auto-Pay" variable (e.g. Netflix, Wifi) with a set billing date. If you don't open the app for 3 months, the system actively runs `runAutoBilling()` on boot via Dexie.js bulk-inserts, instantly mapping exactly how many months you missed and recursively billing them sequentially into your ledger so you never miss recurring data.
 
-**Why use this over SvelteKit?**
+### 5. Advanced Database Architecture (Offline Safety)
+We utilize `Dexie.js` strictly as a lightning-fast data warehouse. All UI elements hydrate rapidly on boot to reactive Svelte 5 `$state` stores. This enables components to render instantly (zero-blocking main-thread lag) while saving your data securely in Chrome's non-volatile persistent storage safely in the background.
 
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
+---
 
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
+## 🛠️ Tech Stack & Dependencies
 
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
+- **Framework:** Svelte 5 (Utilizing modern `$state` and `$derived` execution runes)
+- **Styling:** TailwindCSS 
+- **Database:** Dexie.js (IndexedDB wrapper)
+- **Icons:** lucide-svelte
+- **Bundler:** Vite
 
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
+## 📥 Local Development
 
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
+To clone and run the application locally:
 
-**Why include `.vscode/extensions.json`?**
+1. **Install Dependencies**
+   ```bash
+   npm install
+   ```
 
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
+2. **Start the Development Server**
+   ```bash
+   npm run dev
+   ```
 
-**Why enable `allowJs` in the TS template?**
+3. **Build for Production**
+   ```bash
+   npm run build
+   ```
 
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
+## 🧠 File Structure Guide
 
-**Why is HMR not preserving my local component state?**
+### Application Logic Layer
+- **`src/lib/store.ts`:** The literal brain of the app. Initializes `ExpenseAppDB` (Dexie) local tables and migrates any archaic `localStorage` users upon initial boot. Centralizes calculation for deriving `SafeToSpend` arrays, and serves as our global proxy proxy pushing async interactions to the DB layer seamlessly.
 
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
+### Aesthetic Rendering Layer
+- **`src/App.svelte`:** Our master layout wrapper establishing the floating navigation absolute capsule and top-level constraints.
+- **`src/app.css`:** Tailwinds injection module controlling our core hex environment properties (`[--color-dark-surface]`).
 
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
+### Specialized Component Modules
+- **`DashboardView.svelte`:** Renders the "Safe to Spend" gauge glass-halo arrays, Dynamic upcoming liability lists, and real-time donut spending distributions.
+- **`LogView.svelte`:** The operational data entry layer. Couples deeply active UI chips inside a date-picker constraint grid.
+- **`Numpad.svelte`:** A highly sophisticated iOS wallet-emulating tactile number entry module.
+- **`HistoryView.svelte`:** Transaction chronological rendering grouped algorithmically by Month → Day with micro-deletion handling.
+- **`ManageView.svelte`:** Configuration zone governing Math constraints, Autopays mapping arrays, and JSON structural imports/exports. Contains the highly destructive "Danger Zone".
 
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
-```
+## 🔒 Data Privacy & Management
+
+- **Completely Offline:** This application utilizes IndexedDB (`db.transactions`, `db.autoPays`, etc.). No tracking scripts. No network backend polling. Your net worth strictly resides in your local browser index layer.
+- **Export/Import JSON:** Utilize the settings module to manually back up your structural array history anywhere as raw readable JSON text data to easily migrate device to device safely. 
+
+*Designed locally. Programmed autonomously.*
