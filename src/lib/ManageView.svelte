@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { financeApi, budgetState, autoPays, categories } from './store';
-  import { Settings, Save, Trash2, Download, Upload, Plus, Tag } from 'lucide-svelte';
+  import { financeApi, budgetState, autoPays, categories, transactions } from './store';
+  import { Settings, Save, Trash2, Download, Upload, Plus, Tag, TriangleAlert } from 'lucide-svelte';
 
   // Budget state (mirror store values into local state for the form)
   let incomeInput = $state($budgetState.monthlyIncome.toString());
@@ -15,6 +15,12 @@
   // Category form
   let newCategory = $state('');
   let catError = $state('');
+
+  // Category removal modal
+  let showCategoryModal = $state(false);
+  let categoryToRemove = $state('');
+  let replacementCategory = $state('');
+  let affectedTxsCount = $state(0);
 
   let fileInput = $state<HTMLInputElement>();
 
@@ -57,6 +63,24 @@
     };
     reader.readAsText(file);
     target.value = '';
+  };
+
+  const initiateRemoveCategory = (cat: string) => {
+    const affected = $transactions.filter(t => t.category === cat).length;
+    if (affected > 0) {
+      categoryToRemove = cat;
+      affectedTxsCount = affected;
+      replacementCategory = $categories.filter(c => c !== cat)[0] || 'Misc';
+      showCategoryModal = true;
+    } else {
+      financeApi.removeCategory(cat);
+    }
+  };
+
+  const confirmRemoveCategory = () => {
+    financeApi.removeCategory(categoryToRemove, replacementCategory);
+    showCategoryModal = false;
+    categoryToRemove = '';
   };
 
   const ordinal = (n: number) =>
@@ -130,7 +154,7 @@
           <span class="text-[13px] font-semibold text-white">{cat}</span>
           <button
             class="text-[var(--color-accent-red)] ml-1 active:scale-75 transition-transform"
-            onclick={() => financeApi.removeCategory(cat)}
+            onclick={() => initiateRemoveCategory(cat)}
             aria-label="Remove {cat}"
           >
             <Trash2 class="w-3.5 h-3.5" />
@@ -138,6 +162,22 @@
         </div>
       {/each}
     </div>
+
+    <!-- Inline prompt for category removal migration -->
+    {#if showCategoryModal}
+      <div class="bg-[var(--color-dark-elevated)] p-4 rounded-xl mb-4 border border-[var(--color-dark-border)]">
+        <p class="text-sm text-white mb-3 font-semibold">This category is used in {affectedTxsCount} transactions. Reassign them to:</p>
+        <div class="flex gap-2">
+          <select bind:value={replacementCategory} class="flex-1 bg-[var(--color-dark-bg)] border border-[var(--color-dark-border)] rounded-lg py-2 px-3 text-white font-medium focus:outline-none focus:border-[var(--color-accent-blue)]">
+            {#each $categories.filter(c => c !== categoryToRemove) as opt}
+              <option value={opt}>{opt}</option>
+            {/each}
+          </select>
+          <button onclick={confirmRemoveCategory} class="bg-[var(--color-accent-red)] text-white px-4 py-2 rounded-lg font-bold active:scale-95 transition-transform whitespace-nowrap">Apply & Delete</button>
+          <button onclick={() => showCategoryModal = false} class="bg-[var(--color-dark-surface)] text-white border border-[var(--color-dark-border)] px-4 py-2 rounded-lg font-bold active:scale-95 transition-transform">Cancel</button>
+        </div>
+      </div>
+    {/if}
 
     <!-- Add category -->
     <div class="flex gap-2">
@@ -247,6 +287,26 @@
       </button>
       <input type="file" accept=".json" bind:this={fileInput} onchange={handleImport} class="hidden" />
     </div>
+  </section>
+
+  <!-- ── Danger Zone ──────────────────────────────────────────────── -->
+  <section class="bg-[#1f1115] rounded-2xl p-5 border border-rose-900/50 mt-6">
+    <div class="flex items-center gap-2 mb-2">
+      <TriangleAlert class="w-4 h-4 text-rose-500" />
+      <h2 class="text-[13px] font-bold text-rose-500 uppercase tracking-wider">Danger Zone</h2>
+    </div>
+    <p class="text-[11px] text-[var(--color-dark-muted)] mb-4 font-medium leading-relaxed">Permanently delete all transactions, preferences, and auto-pays. This cannot be undone.</p>
+    <button
+      class="w-full py-3 rounded-xl border border-rose-900 bg-rose-950/20 text-rose-500 font-bold tracking-tight active:bg-rose-900/40 transition-colors"
+      onclick={() => {
+        if (confirm('Are you absolutely sure you want to nuke all your data? This is permanent.')) {
+           financeApi.factoryReset();
+           window.location.reload();
+        }
+      }}
+    >
+      Factory Reset Data
+    </button>
   </section>
 
 </div>

@@ -141,6 +141,14 @@ export const thisMonthData = derived(
     const currentCategorySpending: Record<string, number> = {};
     $cats.forEach(c => (currentCategorySpending[c] = 0));
 
+    const upcomingLiabilities: { month: string, amount: number }[] = [];
+    const upcomingBurdens: Record<string, number> = {};
+    for (let i = 1; i <= 3; i++) {
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const nextYM = getYM(formatDate(nextMonth));
+      upcomingBurdens[nextYM] = 0;
+    }
+
     $txs.forEach(tx => {
       // Dynamic income: count Income transactions this month
       if (tx.isIncome || tx.category === INCOME_CATEGORY) {
@@ -166,10 +174,19 @@ export const thisMonthData = derived(
         } else if (activeMonths.has(targetYM)) {
           pastAmortized[targetYM] += monthlyBurden;
         }
+
+        if (upcomingBurdens[targetYM] !== undefined) {
+          upcomingBurdens[targetYM] += monthlyBurden;
+        }
       }
     });
 
     const totalCurrentAutoPays = $autoPays.reduce((s, ap) => s + ap.amount, 0);
+
+    Object.keys(upcomingBurdens).sort().forEach(ym => {
+      upcomingLiabilities.push({ month: ym, amount: upcomingBurdens[ym] + totalCurrentAutoPays });
+    });
+
     const pastAutoPayBurden = totalCurrentAutoPays * activeMonths.size;
     const pastVariableBurden = Object.values(pastAmortized).reduce((a, b) => a + b, 0);
 
@@ -188,6 +205,7 @@ export const thisMonthData = derived(
       currentCategorySpending,
       totalAutoPays: totalCurrentAutoPays,
       currentMonthIncome,
+      upcomingLiabilities,
     };
   }
 );
@@ -257,23 +275,41 @@ export const runAutoBilling = () => {
   const toAdd: Transaction[] = [];
 
   aps.forEach(ap => {
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const effectiveDay = Math.min(ap.billingDay, lastDay);
+    const apTxs = txs.filter(tx => tx.category === AUTO_PAY_CATEGORY && tx.amount === ap.amount);
+    apTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const lastBilledDate = apTxs.length > 0 ? new Date(apTxs[0].date) : null;
 
-    if (now.getDate() >= effectiveDay) {
-      const alreadyBilled = txs.some(
-        tx => tx.category === AUTO_PAY_CATEGORY && tx.amount === ap.amount && getYM(tx.date) === currentYM
-      );
-      if (!alreadyBilled) {
+    let processDate = lastBilledDate
+      ? new Date(lastBilledDate.getFullYear(), lastBilledDate.getMonth() + 1, 1)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
+
+    while (true) {
+      const py = processDate.getFullYear();
+      const pm = processDate.getMonth();
+      const ny = now.getFullYear();
+      const nm = now.getMonth();
+
+      if (py > ny || (py === ny && pm > nm)) {
+        break; // past current month
+      }
+
+      const lastDay = new Date(py, pm + 1, 0).getDate();
+      const effectiveDay = Math.min(ap.billingDay, lastDay);
+
+      const isCurrentMonth = py === ny && pm === nm;
+      if (!isCurrentMonth || now.getDate() >= effectiveDay) {
+        const billDate = new Date(py, pm, effectiveDay);
         toAdd.push({
           id: `ap-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
           amount: ap.amount,
           category: AUTO_PAY_CATEGORY,
-          date: formatDate(now),
-          time: formatTime(now),
+          date: formatDate(billDate),
+          time: formatTime(billDate),
           durationMonths: 1,
         });
       }
+
+      processDate.setMonth(processDate.getMonth() + 1);
     }
   });
 
@@ -335,7 +371,10 @@ export const financeApi = {
     return true;
   },
 
-  removeCategory: (name: string) => {
+  removeCategory: (name: string, fallbackCategory?: string) => {
+    if (fallbackCategory) {
+      transactions.update(txs => txs.map(t => t.category === name ? { ...t, category: fallbackCategory } : t));
+    }
     categories.update(cats => cats.filter(c => c !== name));
   },
 
@@ -366,6 +405,17 @@ export const financeApi = {
     } catch {
       return false;
     }
+  },
+
+  factoryReset: () => {
+    localStorage.removeItem(STORAGE_KEYS.transactions);
+    localStorage.removeItem(STORAGE_KEYS.autoPays);
+    localStorage.removeItem(STORAGE_KEYS.budget);
+    localStorage.removeItem(STORAGE_KEYS.categories);
+    transactions.set([]);
+    autoPays.set([]);
+    budgetState.set({ monthlyIncome: 0, baseBudget: 0, rolloverAmount: 0 });
+    categories.set(['Diet', 'Snacks/Chai', 'Gym & Supplements', 'Travel', 'Outside Food', 'Shopping', 'Misc']);
   },
 };
 
