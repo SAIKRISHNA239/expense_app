@@ -1,6 +1,6 @@
 # Premium Expense Manager (Fintech Grade)
 
-A highly polished, privacy-first personal finance application modeled after premium fintech experiences. Designed completely offline-first, this app utilizes **IndexedDB (Dexie.js)** to handle vast, multi-year transaction data arrays instantaneously while syncing beautifully smoothly up to **Svelte 5** reactive elements.
+A highly polished, personal finance application modeled after premium fintech experiences. Originally built as an offline-first app, it has been **fully upgraded to a Client-Server Architecture** utilizing a modern **React + FastAPI + PostgreSQL** stack to ensure robust data security, scalability, and seamless cross-device synchronization while preserving its signature instant, "zero-friction" feel.
 
 ## 🚀 Features
 
@@ -15,65 +15,95 @@ Unlike traditional budgeting apps that just track expenses against an arbitrary 
 We stripped back standard boundaries. The visual language relies heavily on iOS-inspired transparent materials:
 - **Floating Navigation Capsule:** Drop-shadow pill layout with micro-animations.
 - **Glass Numpad:** Boundary-free input system wrapping massive typography and inner glowing keys.
-- **Mesh Gradients:** Subtle backlights matching transaction states (Income = Emerald, Expenses = Rose) nested beneath `<nav>` modules and dashboard headers.
+- **Mesh Gradients:** Subtle backlights matching transaction states (Income = Emerald, Expenses = Rose) nested beneath components.
 
 ### 3. Expense Spreading (Amortization)
-Buy an Annual VPN for ₹6,000? Log it with a **12-month spread**. The engine dynamically splits the burden into ₹500 chunks internally distributed throughout the following 12 months, preventing massive single-day purchases from instantly destroying your current month's "Safe to Spend" budget psychologically.
+Buy an Annual VPN for ₹6,000? Log it with a **12-month spread**. The Python math engine dynamically splits the burden into ₹500 chunks internally distributed throughout the following 12 months, preventing massive single-day purchases from instantly destroying your current month's "Safe to Spend" budget psychologically.
 
-### 4. Background Auto-Billing
-Declare an "Auto-Pay" variable (e.g. Netflix, Wifi) with a set billing date. If you don't open the app for 3 months, the system actively runs `runAutoBilling()` on boot via Dexie.js bulk-inserts, instantly mapping exactly how many months you missed and recursively billing them sequentially into your ledger so you never miss recurring data.
+### 4. Background Auto-Billing & Scheduling
+Declare an "Auto-Pay" variable (e.g., Netflix, Wifi) with a set billing date. The FastAPI backend utilizes **APScheduler** to run automated tasks daily at midnight, instantly injecting recurring transactions into your ledger securely on the server-side.
 
-### 5. Advanced Database Architecture (Offline Safety)
-We utilize `Dexie.js` strictly as a lightning-fast data warehouse. All UI elements hydrate rapidly on boot to reactive Svelte 5 `$state` stores. This enables components to render instantly (zero-blocking main-thread lag) while saving your data securely in Chrome's non-volatile persistent storage safely in the background.
+### 5. Optimistic UI & JWT Authentication
+Protected by **OAuth2 JWT Token Authentication**, your financial data is completely private. Despite the client-server separation, the frontend utilizes **TanStack React Query's Optimistic Mutations** to instantly update the UI (zero-blocking main-thread lag) before the server even responds, preserving the app's lightning-fast offline-first roots.
 
 ---
 
 ## 🛠️ Tech Stack & Dependencies
 
-- **Framework:** Svelte 5 (Utilizing modern `$state` and `$derived` execution runes)
-- **Styling:** TailwindCSS 
-- **Database:** Dexie.js (IndexedDB wrapper)
-- **Icons:** lucide-svelte
+### Frontend
+- **Framework:** React 18 + TypeScript
+- **State & Data Fetching:** TanStack React Query (`@tanstack/react-query`)
+- **Styling:** Tailwind CSS v4
+- **Icons:** lucide-react
 - **Bundler:** Vite
 
-## 📥 Local Development
+### Backend
+- **Framework:** Python 3 + FastAPI
+- **Database:** PostgreSQL
+- **ORM & Migrations:** SQLAlchemy + Alembic
+- **Authentication:** JWT (python-jose, passlib, bcrypt)
+- **Background Tasks:** APScheduler
 
-To clone and run the application locally:
+---
 
-1. **Install Dependencies**
-   ```bash
-   npm install
-   ```
+## 📥 Local Development Setup
 
-2. **Start the Development Server**
-   ```bash
-   npm run dev
-   ```
+### 1. Backend Setup
+Ensure you have Python 3.10+ and PostgreSQL installed and running.
 
-3. **Build for Production**
-   ```bash
-   npm run build
-   ```
+```bash
+# Navigate to the backend directory
+cd backend
 
-## 🧠 File Structure Guide
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Or .venv\Scripts\activate on Windows
 
-### Application Logic Layer
-- **`src/lib/store.ts`:** The literal brain of the app. Initializes `ExpenseAppDB` (Dexie) local tables and migrates any archaic `localStorage` users upon initial boot. Centralizes calculation for deriving `SafeToSpend` arrays, and serves as our global proxy proxy pushing async interactions to the DB layer seamlessly.
+# Install dependencies
+pip install -r requirements.txt
 
-### Aesthetic Rendering Layer
-- **`src/App.svelte`:** Our master layout wrapper establishing the floating navigation absolute capsule and top-level constraints.
-- **`src/app.css`:** Tailwinds injection module controlling our core hex environment properties (`[--color-dark-surface]`).
+# Configure your environment variables (.env)
+echo "DATABASE_URL=postgresql://user:password@localhost/expense_db" > .env
+echo "SECRET_KEY=your_super_secret_jwt_key" >> .env
 
-### Specialized Component Modules
-- **`DashboardView.svelte`:** Renders the "Safe to Spend" gauge glass-halo arrays, Dynamic upcoming liability lists, and real-time donut spending distributions.
-- **`LogView.svelte`:** The operational data entry layer. Couples deeply active UI chips inside a date-picker constraint grid.
-- **`Numpad.svelte`:** A highly sophisticated iOS wallet-emulating tactile number entry module.
-- **`HistoryView.svelte`:** Transaction chronological rendering grouped algorithmically by Month → Day with micro-deletion handling.
-- **`ManageView.svelte`:** Configuration zone governing Math constraints, Autopays mapping arrays, and JSON structural imports/exports. Contains the highly destructive "Danger Zone".
+# Run database migrations
+alembic upgrade head
 
-## 🔒 Data Privacy & Management
+# Start the FastAPI server
+fastapi dev app/main.py
+```
+> **Note:** The backend Swagger API documentation is available at `http://localhost:8000/docs`.
 
-- **Completely Offline:** This application utilizes IndexedDB (`db.transactions`, `db.autoPays`, etc.). No tracking scripts. No network backend polling. Your net worth strictly resides in your local browser index layer.
-- **Export/Import JSON:** Utilize the settings module to manually back up your structural array history anywhere as raw readable JSON text data to easily migrate device to device safely. 
+### 2. Frontend Setup
+In a new terminal window:
 
+```bash
+# Navigate to the frontend directory
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start the Vite development server
+npm run dev
+```
+> **Note:** The frontend application will be available at `http://localhost:5173`.
+
+---
+
+## 🧠 Architecture Guide
+
+### Backend Layer (`/backend`)
+- **`app/main.py`:** The FastAPI entry point, configures CORS, custom OpenAPI Swagger UI documentation, and initializes the APScheduler background tasks.
+- **`app/services.py`:** The mathematical brain of the app. Houses the complex `calculate_dashboard` logic responsible for calculating amortized burdens and rolling safe-to-spend arrays over multi-month boundaries.
+- **`app/auth.py`:** Handles JWT creation, password hashing, and user authentication dependencies.
+- **`app/routers/`:** Modularized REST API endpoints for transactions, categories, budgets, and dashboard data.
+
+### Frontend Layer (`/frontend`)
+- **`src/lib/api.ts`:** Axios client configured to automatically handle JWT injection into the `Authorization` headers.
+- **`src/lib/hooks.ts`:** The critical optimistic UI layer. Custom React Query hooks intercept mutations (like deleting or adding an expense) to artificially snap the UI immediately to its predicted state for zero-latency user feedback.
+- **`src/lib/LogView.tsx`:** The highly optimized tactical data-entry module utilizing the Numpad component.
+- **`src/lib/DashboardView.tsx`:** Renders the "Safe to Spend" gauge arrays and complex data visualizations via React `useMemo` hooks mapping directly over server state.
+
+---
 *Designed locally. Programmed autonomously.*
