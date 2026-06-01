@@ -1,70 +1,196 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import LogView from './lib/LogView';
 import DashboardView from './lib/DashboardView';
 import ManageView from './lib/ManageView';
 import HistoryView from './lib/HistoryView';
-import { Calculator, LayoutDashboard, Settings, ClockArrowUp } from 'lucide-react';
+import AuthView from './lib/AuthView';
+import AppHeader from './lib/AppHeader';
+import OfflineBanner from './lib/OfflineBanner';
+import PrivacyPolicy from './lib/PrivacyPolicy';
+import { api, initAuth, setAuthToken } from './lib/api';
+import { getStoredToken, getStoredUsername, setStoredUsername } from './lib/storage';
+import { hydrateQueryCache, cacheFromServer } from './lib/offlineSync';
+import { queryClient } from './lib/queryClient';
+import { isOnline } from './lib/network';
+import { PenLine, PieChart, Clock3, SlidersHorizontal } from 'lucide-react';
 
 type Tab = 'log' | 'dashboard' | 'history' | 'manage';
 
+const TABS: {
+  id: Tab;
+  label: string;
+  icon: typeof PenLine;
+  color: string;
+  indicator: string;
+}[] = [
+  { id: 'log', label: 'Log', icon: PenLine, color: 'text-teal-400', indicator: 'nav-indicator--log' },
+  { id: 'dashboard', label: 'Overview', icon: PieChart, color: 'text-rose-400', indicator: 'nav-indicator--dashboard' },
+  { id: 'history', label: 'History', icon: Clock3, color: 'text-violet-400', indicator: 'nav-indicator--history' },
+  { id: 'manage', label: 'Settings', icon: SlidersHorizontal, color: 'text-amber-400', indicator: 'nav-indicator--manage' },
+];
+
+function AmbientBackground() {
+  return (
+    <div className="ambient-bg" aria-hidden>
+      <div className="ambient-orb ambient-orb-1" />
+      <div className="ambient-orb ambient-orb-2" />
+      <div className="ambient-orb ambient-orb-3" />
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('log');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [username, setUsername] = useState('');
+  const [showPrivacy, setShowPrivacy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      await initAuth();
+      const token = await getStoredToken();
+      if (!token) {
+        setIsAuthenticated(false);
+        return;
+      }
+      try {
+        const user = await api.getMe();
+        setUsername(user.username);
+        await setStoredUsername(user.username);
+        await hydrateQueryCache(queryClient);
+        if (isOnline()) await cacheFromServer();
+        await hydrateQueryCache(queryClient);
+        setIsAuthenticated(true);
+      } catch {
+        if (token && !isOnline()) {
+          const cachedName = (await getStoredUsername()) ?? 'You';
+          setUsername(cachedName);
+          await hydrateQueryCache(queryClient);
+          setIsAuthenticated(true);
+          return;
+        }
+        await setAuthToken(null);
+        await setStoredUsername(null);
+        setIsAuthenticated(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const handleLogout = () => setIsAuthenticated(false);
+    window.addEventListener('auth:logout', handleLogout);
+    return () => window.removeEventListener('auth:logout', handleLogout);
+  }, []);
+
+  const handleLogout = async () => {
+    await setAuthToken(null);
+    await setStoredUsername(null);
+    setUsername('');
+    setIsAuthenticated(false);
+  };
+
+  if (showPrivacy) {
+    return (
+      <>
+        <AmbientBackground />
+        <PrivacyPolicy onClose={() => setShowPrivacy(false)} />
+      </>
+    );
+  }
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="app-shell flex items-center justify-center relative">
+        <AmbientBackground />
+        <div className="relative z-10 flex flex-col items-center gap-3">
+          <div className="brand-mark scale-125">
+            <span className="brand-mark-inner">₹</span>
+          </div>
+          <div className="w-8 h-8 border-2 border-teal-500/30 border-t-teal-400 rounded-full animate-spin mt-2" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <>
+        <AmbientBackground />
+        <AuthView
+          onShowPrivacy={() => setShowPrivacy(true)}
+          onAuthenticated={async () => {
+            try {
+              const user = await api.getMe();
+              setUsername(user.username);
+              await setStoredUsername(user.username);
+              await hydrateQueryCache(queryClient);
+              if (isOnline()) await cacheFromServer();
+              await hydrateQueryCache(queryClient);
+              setIsAuthenticated(true);
+            } catch {
+              await setAuthToken(null);
+              setIsAuthenticated(false);
+            }
+          }}
+        />
+      </>
+    );
+  }
+
+  const tabClass = (tab: Tab) =>
+    activeTab === tab ? 'flex flex-col flex-1 min-h-0 overflow-hidden' : 'hidden';
+
+  const activeIndex = TABS.findIndex((t) => t.id === activeTab);
+  const activeTabMeta = TABS[activeIndex];
 
   return (
-    <main className="h-screen w-full max-w-md mx-auto flex flex-col relative bg-[#0b0c10] overflow-hidden font-sans">
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-hidden relative flex flex-col">
-        {activeTab === 'log' && <LogView />}
-        {activeTab === 'dashboard' && <DashboardView />}
-        {activeTab === 'history' && <HistoryView />}
-        {activeTab === 'manage' && <ManageView />}
-      </div>
+    <>
+      <AmbientBackground />
+      <main className="app-shell flex flex-col relative z-10 safe-top safe-bottom">
+        <OfflineBanner />
+        <AppHeader username={username} onLogout={handleLogout} />
 
-      {/* Floating Bottom Navigation Bar */}
-      <nav className="absolute bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-sm rounded-[2rem] bg-[#0b0c10]/70 backdrop-blur-2xl border border-white/10 p-1.5 shadow-[0_8px_40px_rgba(0,0,0,0.8)] z-50">
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-transparent to-emerald-500/10 rounded-[2rem] pointer-events-none -z-10"></div>
-        <div className="flex justify-around items-center h-[64px]">
-          <button
-            className={`relative flex-1 h-full flex flex-col items-center justify-center gap-1 transition-all duration-300 rounded-2xl ${
-              activeTab === 'log' ? 'text-white bg-white/10 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            onClick={() => setActiveTab('log')}
-          >
-            <Calculator className={`w-5 h-5 transition-transform duration-300 ${activeTab === 'log' ? 'scale-110 drop-shadow-[0_0_12px_rgba(255,255,255,0.3)]' : ''}`} />
-            <span className="text-[9px] font-bold tracking-widest uppercase mt-0.5">Log</span>
-          </button>
-
-          <button
-            className={`relative flex-1 h-full flex flex-col items-center justify-center gap-1 transition-all duration-300 rounded-2xl ${
-              activeTab === 'dashboard' ? 'text-white bg-white/10 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            onClick={() => setActiveTab('dashboard')}
-          >
-            <LayoutDashboard className={`w-5 h-5 transition-transform duration-300 ${activeTab === 'dashboard' ? 'scale-110 drop-shadow-[0_0_12px_rgba(255,255,255,0.3)]' : ''}`} />
-            <span className="text-[9px] font-bold tracking-widest uppercase mt-0.5">Dash</span>
-          </button>
-
-          <button
-            className={`relative flex-1 h-full flex flex-col items-center justify-center gap-1 transition-all duration-300 rounded-2xl ${
-              activeTab === 'history' ? 'text-white bg-white/10 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            onClick={() => setActiveTab('history')}
-          >
-            <ClockArrowUp className={`w-5 h-5 transition-transform duration-300 ${activeTab === 'history' ? 'scale-110 drop-shadow-[0_0_12px_rgba(255,255,255,0.3)]' : ''}`} />
-            <span className="text-[9px] font-bold tracking-widest uppercase mt-0.5">Hist</span>
-          </button>
-
-          <button
-            className={`relative flex-1 h-full flex flex-col items-center justify-center gap-1 transition-all duration-300 rounded-2xl ${
-              activeTab === 'manage' ? 'text-white bg-white/10 shadow-inner' : 'text-zinc-500 hover:text-zinc-300'
-            }`}
-            onClick={() => setActiveTab('manage')}
-          >
-            <Settings className={`w-5 h-5 transition-transform duration-300 ${activeTab === 'manage' ? 'scale-110 drop-shadow-[0_0_12px_rgba(255,255,255,0.3)]' : ''}`} />
-            <span className="text-[9px] font-bold tracking-widest uppercase mt-0.5">Set</span>
-          </button>
+        <div className="flex-1 min-h-0 flex flex-col relative">
+          <div className={tabClass('log')}><LogView /></div>
+          <div className={tabClass('dashboard')}><DashboardView /></div>
+          <div className={tabClass('history')}><HistoryView /></div>
+          <div className={tabClass('manage')}>
+            <ManageView onShowPrivacy={() => setShowPrivacy(true)} onAccountDeleted={handleLogout} />
+          </div>
         </div>
-      </nav>
-    </main>
+
+        <nav
+          className="absolute left-1/2 -translate-x-1/2 w-[min(94%,24rem)] nav-safe-bottom z-50 glass-card p-1.5"
+          style={{ boxShadow: '0 12px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08)' }}
+        >
+          <div className="relative flex h-[56px] sm:h-[60px]">
+            <div
+              className={`nav-indicator ${activeTabMeta?.indicator ?? ''}`}
+              style={{
+                width: `${100 / TABS.length}%`,
+                left: `${(activeIndex * 100) / TABS.length}%`,
+              }}
+            />
+            {TABS.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`nav-pill z-10 ${isActive ? `nav-pill-active ${tab.color}` : 'text-zinc-500'}`}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  <Icon className={`w-[1.125rem] h-[1.125rem] shrink-0 ${isActive ? 'scale-110' : ''}`} />
+                  <span className="text-[9px] font-bold tracking-wide truncate w-full text-center px-0.5">
+                    {tab.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      </main>
+    </>
   );
 }

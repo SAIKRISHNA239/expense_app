@@ -22,11 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field
 class TransactionCreate(BaseModel):
     amount: Decimal = Field(..., gt=0, decimal_places=2)
     category: str = Field(..., min_length=1, max_length=100)
-    date: date                     # YYYY-MM-DD; Pydantic parses ISO strings automatically
-    time: str = Field(..., max_length=20)   # "HH:MM AM/PM"
+    date: date
+    time: str = Field(..., max_length=20)
     duration_months: int = Field(default=1, ge=1, le=120)
     is_income: bool = False
 
+
+class TransactionUpdate(TransactionCreate):
+    pass
 
 
 class TransactionOut(BaseModel):
@@ -78,7 +81,7 @@ class BudgetStateUpdate(BaseModel):
 class BudgetStateOut(BudgetStateUpdate):
     model_config = ConfigDict(from_attributes=True)
 
-    id: str
+    user_id: str
 
 
 # ─── Dashboard (computed, no ORM model) ──────────────────────────────────────

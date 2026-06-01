@@ -8,12 +8,11 @@ from app.database import get_db
 router = APIRouter(tags=["dashboard"])
 
 
-def _compute_dashboard(db: Session) -> schemas.DashboardOut:
-    """Shared logic — fetch all data and run the math engine."""
-    txs = crud.get_transactions(db)
-    aps = crud.get_auto_pays(db)
-    budget = crud.get_budget_state(db)
-    cats = crud.get_categories(db)
+def _compute_dashboard(db: Session, user_id: str) -> schemas.DashboardOut:
+    txs = crud.get_transactions(db, user_id)
+    aps = crud.get_auto_pays(db, user_id)
+    budget = crud.get_budget_state(db, user_id)
+    cats = crud.get_categories(db, user_id)
 
     result = services.calculate_dashboard(txs, aps, budget, cats)
 
@@ -34,21 +33,14 @@ def _compute_dashboard(db: Session) -> schemas.DashboardOut:
 @router.get("/api/dashboard", response_model=schemas.DashboardOut)
 def get_dashboard(
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ):
-    """Server-side port of the `thisMonthData` derived store from store.ts."""
-    return _compute_dashboard(db)
+    return _compute_dashboard(db, current_user.id)
 
 
 @router.get("/api/budget/summary", response_model=schemas.DashboardOut)
 def get_budget_summary(
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ):
-    """
-    Math Engine endpoint — alias for /api/dashboard.
-    Returns safe_to_spend, dynamic_rollover, current_amortized_burden,
-    current_category_spending, total_auto_pays, current_month_income,
-    and upcoming_liabilities.
-    """
-    return _compute_dashboard(db)
+    return _compute_dashboard(db, current_user.id)

@@ -1,13 +1,13 @@
-import json
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.auth import get_current_user
 from app.database import get_db
+from app.services import run_auto_billing
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
@@ -16,28 +16,29 @@ router = APIRouter(prefix="/api/data", tags=["data"])
 def import_data(
     payload: schemas.LegacyImportPayload,
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ):
     tx_count = 0
     ap_count = 0
     cat_count = 0
 
-    if payload.transactions:
-        tx_count = crud.bulk_upsert_transactions(db, payload.transactions)
-
-    if payload.autoPays:
-        ap_count = crud.bulk_upsert_auto_pays(db, payload.autoPays)
-
     if payload.categories:
         for name in payload.categories:
             if isinstance(name, str) and name.strip():
-                crud.create_category(db, name.strip())
-                cat_count += 1
+                if crud.create_category(db, current_user.id, name.strip()):
+                    cat_count += 1
+
+    if payload.transactions:
+        tx_count = crud.bulk_upsert_transactions(db, current_user.id, payload.transactions)
+
+    if payload.autoPays:
+        ap_count = crud.bulk_upsert_auto_pays(db, current_user.id, payload.autoPays)
 
     if payload.budget:
         raw = payload.budget
         crud.upsert_budget_state(
             db,
+            current_user.id,
             schemas.BudgetStateUpdate(
                 monthly_income=raw.get("monthlyIncome", raw.get("monthly_income", 0)),
                 base_budget=raw.get("baseBudget", raw.get("base_budget", 0)),
@@ -45,8 +46,7 @@ def import_data(
             ),
         )
 
-    from app.services import run_auto_billing
-    billed = run_auto_billing(db)
+    billed = run_auto_billing(db, current_user.id)
 
     return {
         "imported": {
@@ -61,20 +61,20 @@ def import_data(
 @router.get("/export", summary="Export full database snapshot as JSON")
 def export_data(
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ):
-    txs = crud.get_transactions(db)
-    aps = crud.get_auto_pays(db)
-    cats = crud.get_categories(db)
-    budget = crud.get_budget_state(db)
+    txs = crud.get_transactions(db, current_user.id)
+    aps = crud.get_auto_pays(db, current_user.id)
+    cats = crud.get_categories(db, current_user.id)
+    budget = crud.get_budget_state(db, current_user.id)
 
     data = {
         "version": 5,
-        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "transactions": [
             {
                 "id": t.id,
-                "amount": float(t.amount),
+                "amount": str(t.amount),
                 "category": t.category,
                 "date": str(t.date),
                 "time": t.time,
@@ -87,16 +87,16 @@ def export_data(
             {
                 "id": ap.id,
                 "name": ap.name,
-                "amount": float(ap.amount),
+                "amount": str(ap.amount),
                 "billingDay": ap.billing_day,
             }
             for ap in aps
         ],
-        "categories": [c.name for c in cats],
+        "categories": [c.name for c in cats if c.name not in crud.RESERVED_CATEGORIES],
         "budget": {
-            "monthlyIncome": float(budget.monthly_income),
-            "baseBudget": float(budget.base_budget),
-            "rolloverAmount": float(budget.rollover_amount),
+            "monthlyIncome": str(budget.monthly_income),
+            "baseBudget": str(budget.base_budget),
+            "rolloverAmount": str(budget.rollover_amount),
         },
     }
 

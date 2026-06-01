@@ -4,13 +4,14 @@ Auth router — register and login endpoints.
 POST /api/auth/register  — create a new user account
 POST /api/auth/login     — exchange credentials for a JWT (OAuth2 password flow)
 GET  /api/auth/me        — return the currently authenticated user's info
+DELETE /api/auth/me      — permanently delete account and all data (Play Store requirement)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import crud, models, schemas
 from app.auth import create_access_token, get_current_user, hash_password, verify_password
 from app.database import get_db
 
@@ -39,6 +40,7 @@ def register(payload: schemas.UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    crud.seed_user_defaults(db, user.id)
     return user
 
 
@@ -78,3 +80,22 @@ def login(
 def get_me(current_user: models.User = Depends(get_current_user)):
     """Use this endpoint to verify that your token is valid."""
     return current_user
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete your account and all data",
+)
+def delete_account(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Required for Google Play Store apps that allow registration.
+    Deletes the user, all transactions, categories, auto-pays, and budget settings.
+    This action is irreversible.
+    """
+    ok = crud.delete_user_account(db, current_user.id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found")

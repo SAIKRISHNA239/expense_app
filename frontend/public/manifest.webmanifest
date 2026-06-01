@@ -1,0 +1,18 @@
+{
+  "name": "Expense Tracker",
+  "short_name": "Expenses",
+  "description": "Personal expense tracker with Safe-to-Spend budgeting",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0c10",
+  "theme_color": "#0b0c10",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

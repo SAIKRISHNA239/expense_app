@@ -1,15 +1,27 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Wallet, Activity, CalendarDays, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useBudgetSummary, useTransactions, useCategories } from './hooks';
-import { formatINR, formatDate, INCOME_CATEGORY, AUTO_PAY_CATEGORY } from './utils';
+import { formatINR, formatDate, INCOME_CATEGORY, AUTO_PAY_CATEGORY, parseLocalDate } from './utils';
+import { LoadingScreen, ErrorScreen } from './LoadingScreen';
 
 export default function DashboardView() {
-  const { data: budgetSummary } = useBudgetSummary();
-  const { data: transactions = [] } = useTransactions();
-  const { data: categories = [] } = useCategories();
+  const { data: budgetSummary, isLoading: summaryLoading, isError, refetch } = useBudgetSummary();
+  const { data: transactions = [], isLoading: txLoading } = useTransactions();
+  const { data: categories = [], isLoading: catLoading } = useCategories();
 
-  const safe = budgetSummary?.safe_to_spend ?? 0;
-  
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setSelectedDay(null);
+  }, [weekOffset]);
+
   const pieColors = ['#3b82f6', '#22c55e', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#f97316', '#06b6d4', '#6366f1', '#14b8a6'];
 
   const progressData = useMemo(() => {
@@ -36,35 +48,12 @@ export default function DashboardView() {
       const slicePct = (d.amt / total) * 100;
       const start = currentAngle;
       currentAngle += slicePct;
-
       gradientStops.push(`${color} ${start}% ${currentAngle}%`);
-
-      legend.push({
-        cat: d.cat,
-        amt: d.amt,
-        color,
-        pct: slicePct
-      });
+      legend.push({ cat: d.cat, amt: d.amt, color, pct: slicePct });
     });
 
     return { total, gradient: `conic-gradient(${gradientStops.join(', ')})`, legend };
   }, [progressData]);
-
-  const [currentTime, setCurrentTime] = useState(new Date());
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const formattedDate = currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric' });
-  const formattedTime = currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-  
-  const [weekOffset, setWeekOffset] = useState(0);
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
-
-  useEffect(() => {
-    setSelectedDay(null);
-  }, [weekOffset]);
 
   const weeklyHeatMapData = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -92,7 +81,7 @@ export default function DashboardView() {
     });
 
     transactions.forEach(tx => {
-      const dateObj = new Date(tx.date);
+      const dateObj = parseLocalDate(tx.date);
       if (
         dateObj >= monday &&
         dateObj <= sunday &&
@@ -133,61 +122,75 @@ export default function DashboardView() {
     };
   }, [transactions, weekOffset]);
 
-  const upcomingLiabilities = budgetSummary?.upcoming_liabilities || [];
+  if (summaryLoading || txLoading || catLoading) return <LoadingScreen />;
+  if (isError || !budgetSummary) return <ErrorScreen message="Could not load dashboard." onRetry={() => refetch()} />;
+
+  const safe = budgetSummary.safe_to_spend;
+  const upcomingLiabilities = budgetSummary.upcoming_liabilities;
+  const formattedDate = currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric' });
+  const formattedTime = currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <div className="flex-1 overflow-y-auto no-scrollbar px-5 pt-6 pb-32 h-full text-[#e4e4e7]">
+    <div className="page-scroll h-full text-zinc-200">
+      <div className="content-pad pt-2 pb-4">
       {/* Header */}
-      <div className="flex justify-between items-start mb-6">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight text-white">Dashboard</h1>
-          <p className="text-[11px] font-bold text-zinc-500 tracking-wider uppercase mt-1">{formattedDate}</p>
+      <div className="flex justify-between items-start mb-5 gap-3">
+        <div className="min-w-0">
+          <h1 className="section-title text-gradient">Overview</h1>
+          <p className="text-[11px] font-semibold text-zinc-500 mt-1">{formattedDate}</p>
         </div>
-        <div className="bg-[#111216]/80 border border-zinc-800 rounded-2xl px-3 py-2 flex items-center gap-2">
-          <Clock className="w-4 h-4 text-blue-500" />
-          <span className="text-xs font-bold tracking-tight text-white">{formattedTime}</span>
+        <div className="glass-card px-3 py-2 flex items-center gap-2 shrink-0">
+          <Clock className="w-4 h-4 text-teal-400" />
+          <span className="text-xs font-bold tabular-nums text-white">{formattedTime}</span>
         </div>
       </div>
 
       {/* Safe to Spend */}
-      <div className="mb-4 relative rounded-[2rem] overflow-hidden p-6 shadow-2xl border border-zinc-800">
-        <div className="absolute inset-0 bg-gradient-to-br from-[#1a1c29] via-[#0b0c10] to-[#121626] -z-10"></div>
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-blue-500/15 rounded-full blur-[64px] pointer-events-none -z-10"></div>
-        <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-[64px] pointer-events-none -z-10"></div>
+      <div className="mb-5 glass-card glass-card-glow p-5 sm:p-6 relative overflow-hidden">
+        <div className="absolute -top-20 -right-20 w-40 h-40 bg-teal-500/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-16 -left-16 w-36 h-36 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="flex flex-col items-center text-center">
-          <div className="w-12 h-12 rounded-full bg-white/5 backdrop-blur-md flex items-center justify-center mb-3 shadow-inner border border-white/5">
-            <Wallet className="w-6 h-6 text-[#e4e4e7]" />
+        <div className="relative flex flex-col items-center text-center">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-teal-500/25 to-rose-500/15 border border-white/10 flex items-center justify-center mb-3">
+            <Wallet className="w-5 h-5 text-teal-300" />
           </div>
-          <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-[0.2em] mb-1">Safe to Spend</span>
-          <h1 className={`text-[52px] font-black tracking-tighter mb-4 leading-none ${safe < 0 ? 'text-rose-500' : 'text-white'}`} style={{ textShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
+          <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-[0.25em] mb-2">Safe to Spend</span>
+          <h2
+            className={`amount-medium font-extrabold tabular-nums mb-3 safe-glow ${
+              safe < 0 ? 'text-rose-400' : 'text-gradient'
+            }`}
+          >
             {formatINR(safe)}
-          </h1>
+          </h2>
+          <p className="text-[11px] text-zinc-500 font-medium mb-4 max-w-[16rem]">
+            {safe < 0
+              ? 'You\'re over budget — check upcoming bills'
+              : safe < 2000
+                ? 'Spend mindfully — you\'ve got some room'
+                : 'Looking good — enjoy with intention'}
+          </p>
 
-          {/* Breakdown pills */}
-          {budgetSummary && (
-            <div className="flex gap-2 text-[10px] font-bold tracking-wide flex-wrap justify-center uppercase">
-              {budgetSummary.current_month_income > 0 && (
-                <span className="px-2.5 py-1 rounded-full bg-emerald-950/40 text-emerald-400 border border-emerald-900/50 backdrop-blur-md">
-                  +{formatINR(budgetSummary.current_month_income)} IN
-                </span>
-              )}
-              <span className="px-2.5 py-1 rounded-full bg-white/5 text-zinc-400 border border-white/5 backdrop-blur-md">
-                {budgetSummary.dynamic_rollover >= 0 ? '+' : ''}{formatINR(budgetSummary.dynamic_rollover)} Roll
+          <div className="flex gap-2 text-[10px] font-bold flex-wrap justify-center">
+            {budgetSummary.current_month_income > 0 && (
+              <span className="chip text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+                +{formatINR(budgetSummary.current_month_income)} in
               </span>
-              <span className="px-2.5 py-1 rounded-full bg-white/5 text-zinc-400 border border-white/5 backdrop-blur-md">
-                -{formatINR(budgetSummary.total_auto_pays)} AUTO
-              </span>
-            </div>
-          )}
+            )}
+            <span className="chip text-zinc-400">
+              {budgetSummary.dynamic_rollover >= 0 ? '+' : ''}{formatINR(budgetSummary.dynamic_rollover)} roll
+            </span>
+            <span className="chip text-rose-300/90 border-rose-500/20 bg-rose-500/10">
+              −{formatINR(budgetSummary.total_auto_pays)} auto
+            </span>
+          </div>
         </div>
       </div>
 
       {/* Weekly Heat Map */}
-      <section className="mb-8 bg-[#111216]/80 p-5 rounded-3xl border border-zinc-800 shadow-xl relative overflow-hidden">
+      <section className="mb-6 glass-card p-4 sm:p-5 relative overflow-hidden">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-blue-500" />
+            <Activity className="w-4 h-4 text-teal-400" />
             <h2 className="text-[12px] font-bold text-white uppercase tracking-wider">{weekOffset === 0 ? 'This Week' : weeklyHeatMapData.dateRangeStr}</h2>
           </div>
           
@@ -209,7 +212,7 @@ export default function DashboardView() {
           </div>
         </div>
 
-        <div className="flex justify-between items-end h-[104px] w-full gap-2 relative z-10">
+        <div className="flex justify-between items-end h-[min(28vw,7rem)] min-h-[5rem] w-full gap-1.5 sm:gap-2 relative z-10">
           {weeklyHeatMapData.heatmap.map((hd) => (
             <button 
               key={hd.day}
@@ -226,7 +229,7 @@ export default function DashboardView() {
                 <div
                   className={`w-full rounded-t-md transition-all duration-700 ease-out relative
                          ${hd.isMax
-                           ? 'bg-gradient-to-t from-blue-500 to-blue-400 shadow-[0_-4px_16px_rgba(59,130,246,0.5)]'
+                           ? 'bg-gradient-to-t from-teal-500 to-teal-300 shadow-[0_-4px_16px_rgba(45,212,191,0.4)]'
                            : hd.rawAmt > 0 ? 'bg-gradient-to-t from-zinc-700 to-zinc-500' : 'bg-transparent'}`}
                   style={{ height: `${Math.max(hd.percent, hd.rawAmt > 0 ? 8 : 0)}%` }}
                 >
@@ -253,7 +256,7 @@ export default function DashboardView() {
               {selectedData.txs.length > 0 ? (
                 <div className="space-y-3">
                   {selectedData.txs.map(tx => (
-                    <div key={tx.id} className="flex justify-between items-center bg-[#111216] px-3 py-2.5 rounded-xl border border-zinc-800">
+                    <div key={tx.id} className="flex justify-between items-center glass-card px-3 py-2.5">
                       <div>
                         <p className="font-bold text-[13px] text-white">{tx.category}</p>
                         <p className="text-[10px] text-zinc-500 font-medium">{tx.time}</p>
@@ -271,13 +274,13 @@ export default function DashboardView() {
       </section>
 
       {/* Category Pie/Donut Chart */}
-      <h2 className="text-[13px] font-bold text-zinc-500 uppercase tracking-wider mb-4 mt-8 px-1">Monthly Spend by Category</h2>
+      <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3 mt-6">Monthly by Category</h2>
       {chartInfo.total > 0 ? (
-        <div className="bg-[#111216]/80 backdrop-blur-xl rounded-[2rem] p-6 border border-zinc-800 shadow-2xl relative overflow-hidden flex flex-col items-center">
+        <div className="glass-card p-5 sm:p-6 relative overflow-hidden flex flex-col items-center mb-6">
           <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none -z-10"></div>
 
-          <div className="relative w-44 h-44 rounded-full mb-8 mt-2 flex items-center justify-center shrink-0 shadow-[0_0_24px_rgba(0,0,0,0.5)] border border-white/10" style={{ background: chartInfo.gradient }}>
-            <div className="absolute inset-0 m-auto w-[124px] h-[124px] bg-[#111216] rounded-full flex flex-col items-center justify-center shadow-inner border border-white/5 backdrop-blur-3xl">
+          <div className="relative w-[min(44vw,11rem)] h-[min(44vw,11rem)] rounded-full mb-6 flex items-center justify-center shrink-0 border border-white/10" style={{ background: chartInfo.gradient }}>
+            <div className="absolute inset-0 m-auto w-[68%] h-[68%] bg-[#111216] rounded-full flex flex-col items-center justify-center border border-white/5">
               <span className="text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-0.5">Total</span>
               <span className="text-xl font-bold text-white tracking-tight">{formatINR(chartInfo.total)}</span>
             </div>
@@ -305,26 +308,21 @@ export default function DashboardView() {
       {/* Upcoming Liabilities */}
       {upcomingLiabilities.some(l => l.amount > 0) && (
         <>
-          <h2 className="text-[13px] font-bold text-zinc-500 uppercase tracking-wider mb-4 mt-8 px-1">Upcoming Liabilities</h2>
-          <div className="space-y-4">
+          <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3 mt-2">Upcoming</h2>
+          <div className="space-y-3 mb-4">
             {upcomingLiabilities.filter(l => l.amount > 0).map(({ month, amount }) => (
-              <div key={month} className="bg-[#111216]/80 backdrop-blur-xl rounded-[1.5rem] p-4 border border-zinc-800 flex items-center gap-4 relative overflow-hidden shadow-xl group transition-all duration-300">
-                <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-red-500/40 via-orange-500/40 to-transparent opacity-50 group-hover:opacity-100 transition-opacity"></div>
-                
-                <div className="w-11 h-11 rounded-full bg-white/5 flex items-center justify-center border border-white/10 shadow-inner">
-                  <CalendarDays className="w-5 h-5 text-zinc-400 group-hover:text-red-400 transition-colors" />
+              <div key={month} className="glass-card p-4 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center border border-rose-500/20">
+                  <CalendarDays className="w-5 h-5 text-rose-400" />
                 </div>
-                <div className="flex-1">
-                  <span className="font-bold text-[16px] text-zinc-200 group-hover:text-white transition-colors tracking-tight">{month}</span>
-                </div>
-                <div className="text-right pr-2">
-                  <span className="font-black text-[16px] text-rose-500">-{formatINR(amount)}</span>
-                </div>
+                <span className="flex-1 font-bold text-white">{month}</span>
+                <span className="font-extrabold text-rose-400 tabular-nums">−{formatINR(amount)}</span>
               </div>
             ))}
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

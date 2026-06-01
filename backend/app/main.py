@@ -12,12 +12,14 @@ Responsibilities:
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from sqlalchemy.orm import Session
 
+from app.config import settings
 from app import crud
-from app.database import SessionLocal, engine
+from app.database import SessionLocal, engine, get_db
 from app.models import Base
 from app.routers import auto_pays, budget, categories, dashboard, data, transactions
 from app.routers.auth_router import router as auth_router
@@ -44,33 +46,35 @@ async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────────────
     # Create all tables if they don't exist yet.
     # In production, prefer `alembic upgrade head`; this is a safe dev fallback.
-    Base.metadata.create_all(bind=engine)
+    # Create tables in dev only — production should use `alembic upgrade head`
+    if settings.AUTO_CREATE_TABLES:
+        Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
     try:
-        crud.seed_default_categories(db)
         count = run_auto_billing(db)
         if count:
             print(f"[Startup] Auto-billing: created {count} transaction(s)")
     finally:
         db.close()
 
-    # Start background scheduler
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(
-        _scheduled_auto_billing,
-        trigger="cron",
-        hour=0,
-        minute=5,
-        id="daily_auto_billing",
-        replace_existing=True,
-    )
-    scheduler.start()
+    scheduler = None
+    if settings.ENABLE_SCHEDULER:
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            _scheduled_auto_billing,
+            trigger="cron",
+            hour=0,
+            minute=5,
+            id="daily_auto_billing",
+            replace_existing=True,
+        )
+        scheduler.start()
 
-    yield  # ── App is running ─────────────────────────────────────────────────
+    yield
 
-    # ── Shutdown ──────────────────────────────────────────────────────────────
-    scheduler.shutdown(wait=False)
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
 
 
 # ─── OpenAPI tag metadata (controls section order + descriptions in Swagger) ─
@@ -190,8 +194,8 @@ Auto-Pay rules self-insert into the transaction ledger. The scheduler runs at
     version="1.0.0",
     openapi_tags=TAGS_METADATA,
     # Swagger UI lives at /docs; ReDoc at /redoc
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if settings.ENABLE_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_DOCS else None,
     lifespan=lifespan,
     # Expose contact info in the spec
     contact={
@@ -228,11 +232,7 @@ app.swagger_ui_parameters = {
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",   # Vite default
-        "http://localhost:4173",   # Vite preview
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -250,9 +250,11 @@ app.include_router(data.router)           # /api/data/* — protected
 
 
 @app.get("/health", tags=["health"], summary="Server health check")
-def health_check():
-    """Returns `ok` when the server is running and reachable."""
-    return {"status": "ok"}
+def health_check(db: Session = Depends(get_db)):
+    """Returns ok when the server and database are reachable."""
+    from sqlalchemy import text
+    db.execute(text("SELECT 1"))
+    return {"status": "ok", "env": settings.ENV}
 
 
 # ─── Custom OpenAPI schema ────────────────────────────────────────────────────

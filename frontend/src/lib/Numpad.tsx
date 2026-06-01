@@ -1,43 +1,71 @@
+import { memo, useCallback, useState, useImperativeHandle, forwardRef } from 'react';
 import { Delete } from 'lucide-react';
 
-interface NumpadProps {
-  amountStr: string;
-  setAmountStr: (val: string) => void;
+export interface NumpadHandle {
+  getAmountNum: () => number;
+  clear: () => void;
 }
 
-export default function Numpad({ amountStr, setAmountStr }: NumpadProps) {
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'delete'];
+interface NumpadProps {
+  onAmountChange: (amountStr: string, amountNum: number) => void;
+}
 
-  const handlePress = (key: string) => {
-    if (key === 'delete') {
-      setAmountStr(amountStr.slice(0, -1));
-    } else if (key === '.') {
-      if (amountStr.includes('.')) return;
-      setAmountStr(amountStr === '' ? '0.' : amountStr + '.');
-    } else {
-      setAmountStr(amountStr === '0' ? key : amountStr + key);
-    }
-  };
+const Numpad = forwardRef<NumpadHandle, NumpadProps>(function Numpad({ onAmountChange }, ref) {
+  const [amountStr, setAmountStr] = useState('');
+
+  useImperativeHandle(ref, () => ({
+    getAmountNum: () => parseFloat(amountStr) || 0,
+    clear: () => {
+      setAmountStr('');
+      onAmountChange('', 0);
+    },
+  }));
+
+  const update = useCallback(
+    (next: string) => {
+      setAmountStr(next);
+      onAmountChange(next, parseFloat(next) || 0);
+    },
+    [onAmountChange],
+  );
+
+  const handlePress = useCallback(
+    (key: string) => {
+      if (key === 'delete') {
+        update(amountStr.slice(0, -1));
+      } else if (key === '.') {
+        if (amountStr.includes('.')) return;
+        update(amountStr === '' ? '0.' : amountStr + '.');
+      } else {
+        update(amountStr === '0' ? key : amountStr + key);
+      }
+    },
+    [amountStr, update],
+  );
+
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'delete'] as const;
 
   return (
-    <div className="grid grid-cols-3 gap-2 px-5 pt-4 pb-32 bg-[#0b0c10]/95 backdrop-blur-3xl rounded-t-[2.5rem] shadow-[0_-8px_40px_rgba(0,0,0,0.5)] border-t border-white/5 select-none touch-none relative z-20">
-      {/* Subtle glowing underlay for numpad */}
-      <div className="absolute inset-0 bg-gradient-to-t from-blue-500/5 to-transparent pointer-events-none rounded-t-[2.5rem]"></div>
-
-      {keys.map((key) => (
-        <button
-          key={key}
-          type="button"
-          className="h-[64px] flex items-center justify-center text-[32px] font-medium rounded-[1.2rem] relative overflow-hidden group bg-transparent text-white active:scale-[0.92] transition-all duration-75 border border-transparent active:border-white/10 active:bg-white/10 border-white/5 shadow-inner"
-          onClick={() => handlePress(key)}
-        >
-          {key === 'delete' ? (
-            <Delete className="w-8 h-8 text-zinc-400 group-active:text-white transition-colors" />
-          ) : (
-            key
-          )}
-        </button>
-      ))}
+    <div className="log-numpad relative z-20 shrink-0 select-none touch-none content-pad pt-2 pb-[calc(5rem+env(safe-area-inset-bottom))]">
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-2 mt-2">
+        {keys.map((key) => (
+          <button
+            key={key}
+            type="button"
+            className="numpad-key text-white tabular-nums"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => handlePress(key)}
+          >
+            {key === 'delete' ? (
+              <Delete className="w-[clamp(1rem,4.5vw,1.5rem)] h-[clamp(1rem,4.5vw,1.5rem)] text-zinc-400" />
+            ) : (
+              key
+            )}
+          </button>
+        ))}
+      </div>
     </div>
   );
-}
+});
+
+export default memo(Numpad);

@@ -1,306 +1,339 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Settings, Save, Trash2, Download, Upload, Plus, Tag, TriangleAlert } from 'lucide-react';
-import { useCategories, useAutoPays, useTransactions } from './hooks';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { queryKeys } from './hooks';
+import {
+  useCategories,
+  useAutoPays,
+  useTransactions,
+  useBudgetConfig,
+  useUpdateBudgetConfig,
+  useAddAutoPay,
+  useDeleteAutoPay,
+  useAddCategory,
+  useDeleteCategory,
+  invalidateAllData,
+} from './hooks';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
+import { useToast } from './Toast';
+import { useConfirm } from './useConfirm';
+import { LoadingScreen, ErrorScreen } from './LoadingScreen';
+import { getErrorMessage } from './utils';
 
-export default function ManageView() {
+interface ManageViewProps {
+  onShowPrivacy: () => void;
+  onAccountDeleted: () => void;
+}
+
+export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageViewProps) {
   const queryClient = useQueryClient();
-  const { data: categories = [] } = useCategories();
-  const { data: autoPays = [] } = useAutoPays();
-  const { data: transactions = [] } = useTransactions();
+  const { data: categories, isLoading: catsLoading } = useCategories();
+  const { data: autoPays, isLoading: apLoading } = useAutoPays();
+  const { data: transactions } = useTransactions();
+  const { data: budgetState, isLoading: budgetLoading, isError, refetch } = useBudgetConfig();
+  const updateBudgetConfig = useUpdateBudgetConfig();
+  const addAutoPay = useAddAutoPay();
+  const deleteAutoPay = useDeleteAutoPay();
+  const addCategory = useAddCategory();
+  const deleteCategory = useDeleteCategory();
+  const { showToast } = useToast();
+  const { confirm, dialog } = useConfirm();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch budget config directly
-  const { data: budgetState } = useQuery({
-    queryKey: queryKeys.budgetConfig,
-    queryFn: api.getBudgetConfig,
-  });
-
-  const updateBudgetConfig = useMutation({
-    mutationFn: api.updateBudgetConfig,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.budgetConfig });
-      queryClient.invalidateQueries({ queryKey: queryKeys.budgetSummary });
-    }
-  });
-
-  const addAutoPay = useMutation({
-    mutationFn: api.addAutoPay,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.autoPays })
-  });
-
-  const deleteAutoPay = useMutation({
-    mutationFn: api.deleteAutoPay,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.autoPays })
-  });
-
-  const addCategory = useMutation({
-    mutationFn: api.addCategory,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.categories })
-  });
-
-  const deleteCategory = useMutation({
-    mutationFn: ({ name, reassignTo }: { name: string, reassignTo?: string }) => api.deleteCategory(name, reassignTo),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.categories });
-      queryClient.invalidateQueries({ queryKey: queryKeys.transactions });
-      queryClient.invalidateQueries({ queryKey: queryKeys.budgetSummary });
-    }
-  });
-
-  // Local state for Budget form
   const [incomeInput, setIncomeInput] = useState('');
   const [budgetInput, setBudgetInput] = useState('');
   const [rolloverInput, setRolloverInput] = useState('');
-
-  useEffect(() => {
-    if (budgetState) {
-      setIncomeInput(budgetState.monthly_income.toString());
-      setBudgetInput(budgetState.base_budget.toString());
-      setRolloverInput(budgetState.rollover_amount.toString());
-    }
-  }, [budgetState]);
-
-  // Auto-Pay form
   const [apName, setApName] = useState('');
   const [apAmount, setApAmount] = useState('');
   const [apDay, setApDay] = useState('1');
-
-  // Category form
   const [newCategory, setNewCategory] = useState('');
   const [catError, setCatError] = useState('');
-
-  // Category removal modal
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [categoryToRemove, setCategoryToRemove] = useState('');
   const [replacementCategory, setReplacementCategory] = useState('');
   const [affectedTxsCount, setAffectedTxsCount] = useState(0);
+  const [importing, setImporting] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (budgetState) {
+      setIncomeInput(String(budgetState.monthly_income));
+      setBudgetInput(String(budgetState.base_budget));
+      setRolloverInput(String(budgetState.rollover_amount));
+    }
+  }, [budgetState]);
 
   const saveBudgetSettings = () => {
-    updateBudgetConfig.mutate({
-      monthly_income: parseFloat(incomeInput) || 0,
-      base_budget: parseFloat(budgetInput) || 0,
-      rollover_amount: parseFloat(rolloverInput) || 0,
-    });
+    updateBudgetConfig.mutate(
+      {
+        monthly_income: parseFloat(incomeInput) || 0,
+        base_budget: parseFloat(budgetInput) || 0,
+        rollover_amount: parseFloat(rolloverInput) || 0,
+      },
+      {
+        onSuccess: () => showToast('Budget saved', 'success'),
+        onError: (err) => showToast(getErrorMessage(err, 'Failed to save budget'), 'error'),
+      }
+    );
   };
 
   const handleAddAutoPay = () => {
     const amt = parseFloat(apAmount);
     const day = parseInt(apDay);
     if (!apName.trim() || isNaN(amt) || amt <= 0 || isNaN(day) || day < 1 || day > 31) return;
-    
-    addAutoPay.mutate({
-      name: apName.trim(),
-      amount: amt,
-      billing_day: day
-    });
-    
-    setApName('');
-    setApAmount('');
-    setApDay('1');
+
+    addAutoPay.mutate(
+      { name: apName.trim(), amount: amt, billing_day: day },
+      {
+        onSuccess: () => {
+          setApName('');
+          setApAmount('');
+          setApDay('1');
+          showToast('Auto-pay added', 'success');
+        },
+        onError: (err) => showToast(getErrorMessage(err, 'Failed to add auto-pay'), 'error'),
+      }
+    );
   };
 
   const handleAddCategory = () => {
     setCatError('');
-    if (!newCategory.trim() || categories.includes(newCategory.trim())) {
+    const name = newCategory.trim();
+    if (!name || (categories ?? []).includes(name)) {
       setCatError('Already exists or empty');
       return;
     }
-    addCategory.mutate(newCategory.trim(), {
-      onSuccess: () => setNewCategory(''),
-      onError: () => setCatError('Failed to add category')
+    addCategory.mutate(name, {
+      onSuccess: () => {
+        setNewCategory('');
+        showToast('Category added', 'success');
+      },
+      onError: (err) => setCatError(getErrorMessage(err, 'Failed to add category')),
     });
   };
 
   const initiateRemoveCategory = (cat: string) => {
-    const affected = transactions.filter(t => t.category === cat).length;
+    const affected = (transactions ?? []).filter((t) => t.category === cat).length;
     if (affected > 0) {
       setCategoryToRemove(cat);
       setAffectedTxsCount(affected);
-      setReplacementCategory(categories.filter(c => c !== cat)[0] || 'Misc');
+      const others = (categories ?? []).filter((c) => c !== cat);
+      setReplacementCategory(others[0] ?? 'Misc');
       setShowCategoryModal(true);
     } else {
-      deleteCategory.mutate({ name: cat });
+      deleteCategory.mutate(
+        { name: cat },
+        {
+          onSuccess: () => showToast('Category removed', 'success'),
+          onError: (err) => showToast(getErrorMessage(err, 'Failed to remove category'), 'error'),
+        }
+      );
     }
   };
 
   const confirmRemoveCategory = () => {
-    deleteCategory.mutate({ name: categoryToRemove, reassignTo: replacementCategory });
-    setShowCategoryModal(false);
-    setCategoryToRemove('');
+    deleteCategory.mutate(
+      { name: categoryToRemove, reassignTo: replacementCategory },
+      {
+        onSuccess: () => {
+          setShowCategoryModal(false);
+          setCategoryToRemove('');
+          showToast('Category removed', 'success');
+        },
+        onError: (err) => showToast(getErrorMessage(err, 'Failed to remove category'), 'error'),
+      }
+    );
+  };
+
+  const handleExport = async () => {
+    try {
+      const data = await api.exportData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `expense-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Backup downloaded', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Export failed'), 'error');
+    }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const ok = await confirm('Import will merge this backup into your account. Continue?');
+    if (!ok) return;
+
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      await api.importData(payload);
+      invalidateAllData(queryClient);
+      showToast('Import complete', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Import failed — check file format'), 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleDeleteAutoPay = async (id: string) => {
+    const ok = await confirm('Remove this auto-pay rule? Past bills stay in history.');
+    if (!ok) return;
+    deleteAutoPay.mutate(id, {
+      onSuccess: () => showToast('Auto-pay removed', 'success'),
+      onError: (err) => showToast(getErrorMessage(err, 'Failed to remove'), 'error'),
+    });
+  };
+
+  const handleDeleteAccount = async () => {
+    const ok = await confirm(
+      'Permanently delete your account and ALL data? This cannot be undone. Export a backup first if needed.'
+    );
+    if (!ok) return;
+    try {
+      await api.deleteAccount();
+      showToast('Account deleted', 'success');
+      onAccountDeleted();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to delete account'), 'error');
+    }
   };
 
   const ordinal = (n: number) =>
     n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
 
+  if (catsLoading || apLoading || budgetLoading) return <LoadingScreen />;
+  if (isError) return <ErrorScreen message="Could not load settings." onRetry={() => refetch()} />;
+
+  const catList = categories ?? [];
+  const apList = autoPays ?? [];
+
   return (
-    <div className="flex-1 overflow-y-auto no-scrollbar px-5 pt-6 pb-32 h-full text-[#e4e4e7]">
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-8 pt-2">
-        <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center border border-white/10 shadow-inner">
-          <Settings className="w-6 h-6 text-zinc-300" />
+    <div className="page-scroll h-full">
+      {dialog}
+
+      <div className="content-pad pt-2 pb-4">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 border border-white/10 flex items-center justify-center">
+          <Settings className="w-5 h-5 text-amber-400" />
         </div>
-        <h1 className="text-[28px] font-black tracking-tighter text-white">Manage</h1>
+        <h1 className="section-title text-white">Manage</h1>
       </div>
 
-      {/* Budget Variables */}
-      <section className="bg-[#111216]/80 backdrop-blur-xl rounded-[1.5rem] p-5 mb-8 border border-zinc-800/80 shadow-2xl relative overflow-hidden group">
-        <div className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent pointer-events-none -z-10"></div>
+      <section className="glass-card p-5 mb-6">
         <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Global Math Variables</h2>
         <div className="space-y-4">
-          <div className="flex flex-col">
-            <label htmlFor="incomeInput" className="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Assumed Monthly Income</label>
-            <div className="relative group-focus-within:drop-shadow-[0_0_12px_rgba(59,130,246,0.2)] transition-shadow">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-              <input id="incomeInput" type="number" value={incomeInput} onChange={e => setIncomeInput(e.target.value)}
-                className="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 focus:bg-[#0b0c10] transition-colors"
-                style={{ touchAction: 'auto' }} />
+          {[
+            { id: 'incomeInput', label: 'Assumed Monthly Income', value: incomeInput, set: setIncomeInput },
+            { id: 'budgetInput', label: 'Budget Cap (chart scaling)', value: budgetInput, set: setBudgetInput },
+            { id: 'rolloverInput', label: 'Initial Rollover', value: rolloverInput, set: setRolloverInput },
+          ].map(({ id, label, value, set }) => (
+            <div key={id} className="flex flex-col">
+              <label htmlFor={id} className="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">{label}</label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
+                <input
+                  id={id}
+                  type="number"
+                  value={value}
+                  onChange={(e) => set(e.target.value)}
+                  className="w-full bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50"
+                />
+              </div>
             </div>
-          </div>
-
-          <div className="flex flex-col">
-            <label htmlFor="budgetInput" className="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Budget Cap (for chart scaling)</label>
-            <div className="relative group-focus-within:drop-shadow-[0_0_12px_rgba(59,130,246,0.2)] transition-shadow">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-              <input id="budgetInput" type="number" value={budgetInput} onChange={e => setBudgetInput(e.target.value)}
-                className="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 focus:bg-[#0b0c10] transition-colors"
-                style={{ touchAction: 'auto' }} />
-            </div>
-          </div>
-
-          <div className="flex flex-col">
-            <label htmlFor="rolloverInput" className="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">Initial Rollover</label>
-            <div className="relative group-focus-within:drop-shadow-[0_0_12px_rgba(59,130,246,0.2)] transition-shadow">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-              <input id="rolloverInput" type="number" value={rolloverInput} onChange={e => setRolloverInput(e.target.value)}
-                className="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 focus:bg-[#0b0c10] transition-colors"
-                style={{ touchAction: 'auto' }} />
-            </div>
-          </div>
-
+          ))}
           <button
-            className="w-full bg-blue-500/10 text-blue-400 border border-blue-500/20 py-3 rounded-xl font-bold tracking-wide active:scale-[0.98] transition-all flex items-center justify-center gap-2 mt-2 shadow-inner hover:bg-blue-500/20"
+            className="w-full bg-blue-500/10 text-blue-400 border border-blue-500/20 py-3 rounded-xl font-bold flex items-center justify-center gap-2"
             onClick={saveBudgetSettings}
+            disabled={updateBudgetConfig.isPending}
           >
-            <Save className="w-4 h-4" /> Save Variables
+            <Save className="w-4 h-4" /> {updateBudgetConfig.isPending ? 'Saving…' : 'Save Variables'}
           </button>
         </div>
       </section>
 
-      {/* Categories CRUD */}
-      <section className="bg-[#111216]/80 backdrop-blur-xl rounded-[1.5rem] p-5 mb-8 border border-zinc-800/80 shadow-2xl relative overflow-hidden group">
-        <div className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent pointer-events-none -z-10"></div>
+      <section className="glass-card p-5 mb-6">
         <div className="flex items-center gap-2 mb-4">
           <Tag className="w-4 h-4 text-zinc-500" />
           <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">Expense Categories</h2>
         </div>
-
         <div className="flex flex-wrap gap-2.5 mb-5">
-          {categories.map(cat => (
-            <div key={cat} className="flex items-center gap-1.5 bg-white/5 border border-white/5 shadow-inner rounded-full px-3.5 py-1.5">
-              <span className="text-[13px] font-bold text-white tracking-tight">{cat}</span>
-              <button
-                className="text-rose-500 ml-0.5 hover:text-white hover:bg-rose-500/80 rounded-full p-1 active:scale-75 transition-all"
-                onClick={() => initiateRemoveCategory(cat)}
-                aria-label={`Remove ${cat}`}
-              >
+          {catList.map((cat) => (
+            <div key={cat} className="flex items-center gap-1.5 bg-white/5 border border-white/5 rounded-full px-3.5 py-1.5">
+              <span className="text-[13px] font-bold text-white">{cat}</span>
+              <button className="text-rose-500 hover:bg-rose-500/80 rounded-full p-1" onClick={() => initiateRemoveCategory(cat)}>
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
           ))}
         </div>
-
         {showCategoryModal && (
-          <div className="bg-rose-500/5 p-4 rounded-xl mb-5 border border-rose-500/10 shadow-inner">
-            <p className="text-[13px] text-white mb-3 font-semibold leading-relaxed">This category is used in <span className="text-rose-400 font-bold">{affectedTxsCount}</span> transactions. Reassign them to:</p>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <select value={replacementCategory} onChange={e => setReplacementCategory(e.target.value)} className="flex-1 bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-lg py-2.5 px-3 text-white font-bold focus:outline-none focus:border-blue-500/50 transition-colors">
-                {categories.filter(c => c !== categoryToRemove).map(opt => (
+          <div className="bg-rose-500/5 p-4 rounded-xl mb-5 border border-rose-500/10">
+            <p className="text-[13px] text-white mb-3">Reassign <span className="text-rose-400 font-bold">{affectedTxsCount}</span> transactions to:</p>
+            <div className="flex flex-col gap-2">
+              <select value={replacementCategory} onChange={(e) => setReplacementCategory(e.target.value)} className="bg-[#0b0c10] border border-white/5 rounded-lg py-2.5 px-3 text-white font-bold">
+                {catList.filter((c) => c !== categoryToRemove).map((opt) => (
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
               </select>
-              <button onClick={confirmRemoveCategory} className="bg-rose-500/10 text-rose-500 border border-rose-500/20 px-4 py-2.5 rounded-lg font-bold active:scale-95 transition-all w-full sm:w-auto text-[13px]">Apply & Delete</button>
-              <button onClick={() => setShowCategoryModal(false)} className="bg-white/5 text-white border border-white/5 px-4 py-2.5 rounded-lg font-bold active:scale-95 transition-all w-full sm:w-auto text-[13px]">Cancel</button>
+              <div className="flex gap-2">
+                <button onClick={confirmRemoveCategory} className="flex-1 bg-rose-500/10 text-rose-500 border border-rose-500/20 py-2.5 rounded-lg font-bold">Apply & Delete</button>
+                <button onClick={() => setShowCategoryModal(false)} className="flex-1 bg-white/5 text-white border border-white/5 py-2.5 rounded-lg font-bold">Cancel</button>
+              </div>
             </div>
           </div>
         )}
-
         <div className="flex gap-2">
           <input
             type="text"
             value={newCategory}
-            onChange={e => setNewCategory(e.target.value)}
+            onChange={(e) => setNewCategory(e.target.value)}
             placeholder="New category name"
-            className="flex-1 bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3 px-4 text-white font-bold focus:outline-none focus:border-blue-500/50 transition-colors text-[14px]"
-            style={{ touchAction: 'auto' }}
-            onKeyDown={e => e.key === 'Enter' && handleAddCategory()}
+            className="flex-1 bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3 px-4 text-white font-bold"
+            onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
           />
-          <button
-            className="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-4 rounded-xl font-bold active:scale-95 transition-all flex items-center justify-center gap-1.5 hover:bg-blue-500/20"
-            onClick={handleAddCategory}
-          >
+          <button className="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-4 rounded-xl" onClick={handleAddCategory}>
             <Plus className="w-5 h-5" />
           </button>
         </div>
-        {catError && <p className="text-rose-400 text-xs mt-2.5 font-bold tracking-wide">{catError}</p>}
+        {catError && <p className="text-rose-400 text-xs mt-2 font-bold">{catError}</p>}
       </section>
 
-      {/* Add Auto-Pay */}
-      <section className="bg-[#111216]/80 backdrop-blur-xl rounded-[1.5rem] p-5 mb-8 border border-zinc-800/80 shadow-2xl relative overflow-hidden">
-        <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">Add Auto-Pay</h2>
-        <p className="text-[11px] text-zinc-500/70 mb-4 font-bold tracking-wide">Auto-logged when billing day arrives.</p>
+      <section className="glass-card p-5 mb-6">
+        <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Add Auto-Pay</h2>
         <div className="space-y-3 mb-5">
-          <input
-            type="text"
-            value={apName}
-            onChange={e => setApName(e.target.value)}
-            placeholder="Name (e.g. Netflix)"
-            className="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold focus:outline-none focus:border-blue-500/50 transition-colors"
-            style={{ touchAction: 'auto' }}
-          />
-          <div className="flex gap-3 relative">
-            <div className="relative flex-[2]">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-              <input type="number" value={apAmount} onChange={e => setApAmount(e.target.value)} placeholder="Amount"
-                className="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3.5 pl-9 pr-4 text-white font-bold focus:outline-none focus:border-blue-500/50 transition-colors"
-                style={{ touchAction: 'auto' }} />
-            </div>
-            <div className="relative flex-1">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 font-black text-[9px] uppercase tracking-widest">Day</span>
-              <input type="number" value={apDay} onChange={e => setApDay(e.target.value)} min="1" max="31"
-                className="w-full bg-[#0b0c10]/80 shadow-inner border border-white/5 rounded-xl py-3.5 pl-11 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50 transition-colors"
-                style={{ touchAction: 'auto' }} />
-            </div>
+          <input type="text" value={apName} onChange={(e) => setApName(e.target.value)} placeholder="Name (e.g. Netflix)"
+            className="w-full bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold" />
+          <div className="flex gap-3">
+            <input type="number" value={apAmount} onChange={(e) => setApAmount(e.target.value)} placeholder="Amount"
+              className="flex-[2] bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold" />
+            <input type="number" value={apDay} onChange={(e) => setApDay(e.target.value)} min={1} max={31} placeholder="Day"
+              className="flex-1 bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold" />
           </div>
         </div>
-        <button
-          className="w-full bg-white/5 text-white border border-white/10 py-3.5 rounded-xl font-bold tracking-wide active:scale-[0.98] transition-all shadow-inner hover:bg-white/10"
-          onClick={handleAddAutoPay}
-        >
+        <button className="w-full bg-white/5 text-white border border-white/10 py-3.5 rounded-xl font-bold" onClick={handleAddAutoPay}>
           Save Auto-Pay Rule
         </button>
       </section>
 
-      {/* Active Auto-Pays */}
-      {autoPays.length > 0 && (
+      {apList.length > 0 && (
         <section className="mb-8">
-          <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4 px-1">Active Auto-Pays</h2>
+          <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Active Auto-Pays</h2>
           <div className="space-y-3">
-            {autoPays.map(ap => (
-              <div key={ap.id} className="flex items-center justify-between bg-[#111216]/80 backdrop-blur-xl p-4 rounded-[1.2rem] border border-white/5 shadow-lg group">
+            {apList.map((ap) => (
+              <div key={ap.id} className="flex items-center justify-between glass-card p-4">
                 <div>
-                  <p className="font-bold text-[15px] text-white tracking-tight">{ap.name}</p>
-                  <p className="text-[11px] text-zinc-500 font-bold uppercase tracking-wider mt-0.5">Bills on the {ordinal(ap.billing_day)}</p>
+                  <p className="font-bold text-[15px] text-white">{ap.name}</p>
+                  <p className="text-[11px] text-zinc-500 font-bold uppercase">Bills on the {ordinal(ap.billing_day)}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="font-black text-rose-400">₹{Number(ap.amount).toLocaleString('en-IN')}</span>
-                  <button
-                    className="w-8 h-8 flex items-center justify-center bg-white/5 rounded-full border border-white/5 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/10 active:scale-90 transition-all"
-                    onClick={() => deleteAutoPay.mutate(ap.id)}
-                  >
+                  <button className="w-8 h-8 flex items-center justify-center bg-white/5 rounded-full text-zinc-500 hover:text-rose-500" onClick={() => handleDeleteAutoPay(ap.id)}>
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -310,15 +343,44 @@ export default function ManageView() {
         </section>
       )}
 
-      {/* Data Management (Omitted file upload as backend manages state now, unless API endpoint added) */}
-      <section className="bg-rose-950/20 backdrop-blur-xl rounded-[1.5rem] p-5 border border-rose-900/50 shadow-2xl mt-12">
-        <div className="flex items-center gap-2 mb-3">
-          <TriangleAlert className="w-5 h-5 text-rose-500" />
-          <h2 className="text-[11px] font-bold text-rose-500 uppercase tracking-widest">Danger Zone</h2>
+      <section className="glass-card p-5 mb-6">
+        <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Backup & Restore</h2>
+        <p className="text-[11px] text-zinc-500 mb-4">Export your data regularly. Import merges a backup into your account.</p>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+            <Download className="w-4 h-4" /> Export
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold disabled:opacity-50"
+          >
+            <Upload className="w-4 h-4" /> {importing ? 'Importing…' : 'Import'}
+          </button>
+          <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImportFile} />
         </div>
-        <p className="text-[11px] text-zinc-400 mb-5 font-bold leading-relaxed pr-4">Data is stored securely on the server. If you wish to wipe it, use the backend database tooling or future API endpoints.</p>
       </section>
 
+      <section className="bg-rose-950/20 rounded-[1.5rem] p-5 border border-rose-900/50 mb-8">
+        <div className="flex items-center gap-2 mb-2">
+          <TriangleAlert className="w-5 h-5 text-rose-500" />
+          <h2 className="text-[11px] font-bold text-rose-500 uppercase tracking-widest">Account</h2>
+        </div>
+        <p className="text-[11px] text-zinc-400 font-medium mb-4">Your data is private to your account. Export backups before switching devices.</p>
+        <button
+          onClick={onShowPrivacy}
+          className="w-full mb-2 py-2.5 rounded-xl bg-white/5 border border-white/10 text-zinc-300 text-[13px] font-bold"
+        >
+          Privacy Policy
+        </button>
+        <button
+          onClick={handleDeleteAccount}
+          className="w-full py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[13px] font-bold"
+        >
+          Delete Account & All Data
+        </button>
+      </section>
+      </div>
     </div>
   );
 }

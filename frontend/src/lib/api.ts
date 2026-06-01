@@ -1,7 +1,7 @@
 import axios from 'axios';
+import { getStoredToken, setStoredToken } from './storage';
 
-// Base URL configuration (can be updated to use env vars later)
-export const API_URL = 'http://localhost:8001/api';
+export const API_URL = import.meta.env.VITE_API_URL ?? '/api';
 
 const apiClient = axios.create({
   baseURL: API_URL,
@@ -10,22 +10,32 @@ const apiClient = axios.create({
   },
 });
 
-// Setup interceptor for JWT if authentication is needed on the frontend
-export const setAuthToken = (token: string | null) => {
+export async function initAuth(): Promise<void> {
+  const token = await getStoredToken();
   if (token) {
     apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    localStorage.setItem('token', token);
+  }
+}
+
+export const setAuthToken = async (token: string | null) => {
+  if (token) {
+    apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
   } else {
     delete apiClient.defaults.headers.common['Authorization'];
-    localStorage.removeItem('token');
   }
+  await setStoredToken(token);
 };
 
-// Initialize token from localStorage if available
-const token = localStorage.getItem('token');
-if (token) {
-  setAuthToken(token);
-}
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      await setAuthToken(null);
+      window.dispatchEvent(new Event('auth:logout'));
+    }
+    return Promise.reject(error);
+  }
+);
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -71,10 +81,43 @@ export interface BudgetState {
   rollover_amount: number;
 }
 
+export interface User {
+  id: string;
+  username: string;
+}
+
+export interface AuthToken {
+  access_token: string;
+  token_type: string;
+}
+
 // ─── API Functions ──────────────────────────────────────────────────────────
 
 export const api = {
-  // Budget & Dashboard
+  register: async (username: string, password: string): Promise<User> => {
+    const response = await apiClient.post<User>('/auth/register', { username, password });
+    return response.data;
+  },
+
+  login: async (username: string, password: string): Promise<AuthToken> => {
+    const params = new URLSearchParams();
+    params.append('username', username);
+    params.append('password', password);
+    const response = await apiClient.post<AuthToken>('/auth/login', params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    return response.data;
+  },
+
+  getMe: async (): Promise<User> => {
+    const response = await apiClient.get<User>('/auth/me');
+    return response.data;
+  },
+
+  deleteAccount: async (): Promise<void> => {
+    await apiClient.delete('/auth/me');
+  },
+
   getBudgetSummary: async (): Promise<DashboardOut> => {
     const response = await apiClient.get<DashboardOut>('/budget/summary');
     return response.data;
@@ -90,7 +133,6 @@ export const api = {
     return response.data;
   },
 
-  // Transactions
   getTransactions: async (): Promise<Transaction[]> => {
     const response = await apiClient.get<Transaction[]>('/transactions');
     return response.data;
@@ -105,7 +147,11 @@ export const api = {
     await apiClient.delete(`/transactions/${id}`);
   },
 
-  // Auto-Pays
+  updateTransaction: async (id: string, data: TransactionCreate): Promise<Transaction> => {
+    const response = await apiClient.put<Transaction>(`/transactions/${id}`, data);
+    return response.data;
+  },
+
   getAutoPays: async (): Promise<AutoPay[]> => {
     const response = await apiClient.get<AutoPay[]>('/auto-pays');
     return response.data;
@@ -120,21 +166,29 @@ export const api = {
     await apiClient.delete(`/auto-pays/${id}`);
   },
 
-  // Categories
   getCategories: async (): Promise<string[]> => {
     const response = await apiClient.get<string[]>('/categories');
     return response.data;
   },
 
   addCategory: async (name: string): Promise<string> => {
-    // Backend creates and returns { name: string }
     const response = await apiClient.post<{ name: string }>('/categories', { name });
     return response.data.name;
   },
 
   deleteCategory: async (name: string, reassignTo?: string): Promise<void> => {
-    await apiClient.delete(`/categories/${name}`, {
+    await apiClient.delete(`/categories/${encodeURIComponent(name)}`, {
       params: reassignTo ? { reassign_to: reassignTo } : undefined,
     });
+  },
+
+  exportData: async (): Promise<object> => {
+    const response = await apiClient.get('/data/export');
+    return response.data;
+  },
+
+  importData: async (payload: object): Promise<object> => {
+    const response = await apiClient.post('/data/import', payload);
+    return response.data;
   },
 };

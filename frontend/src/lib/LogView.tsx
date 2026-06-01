@@ -1,27 +1,251 @@
-import { useState, useMemo } from 'react';
-import { Trash2, CheckCircle2, History, TrendingUp } from 'lucide-react';
-import Numpad from './Numpad';
+import { useState, useMemo, useCallback, memo, useRef } from 'react';
+import { Trash2, History, TrendingUp } from 'lucide-react';
+import Numpad, { type NumpadHandle } from './Numpad';
+import SaveCelebration from './SaveCelebration';
 import { useTransactions, useCategories, useAddTransaction, useDeleteTransaction } from './hooks';
-import { INCOME_CATEGORY, formatDate, formatTime, formatINR } from './utils';
+import { useToast } from './Toast';
+import { useConfirm } from './useConfirm';
+import { LoadingScreen, ErrorScreen } from './LoadingScreen';
+import { getCategoryAccent } from './categoryColors';
+import { getCategoryEmoji } from './categoryIcons';
+import { getLogPrompt, getSuccessMessage } from './dailyStats';
+import { isOnline } from './network';
+import type { Transaction } from './api';
+import { INCOME_CATEGORY, formatDate, formatTime, formatINR, getErrorMessage } from './utils';
+
+const AmountDisplay = memo(function AmountDisplay({ amountStr }: { amountStr: string }) {
+  const hasAmount = (parseFloat(amountStr) || 0) > 0;
+  const prompt = getLogPrompt(hasAmount);
+  return (
+    <section className="log-amount py-2 text-center">
+      <p className={`log-prompt ${hasAmount ? 'log-prompt--active' : ''}`}>{prompt}</p>
+      <span className={`text-xl font-bold ${hasAmount ? 'text-teal-400' : 'text-zinc-700'}`}>₹</span>
+      <div
+        className={`amount-hero font-extrabold tabular-nums truncate ${
+          hasAmount ? 'amount-hero--live' : 'text-zinc-800'
+        }`}
+      >
+        {amountStr || '0'}
+      </div>
+    </section>
+  );
+});
+
+/* ─── Recent entries ───────────────────────────────────────────────────────── */
+
+const RecentLogs = memo(function RecentLogs({
+  logs,
+  onDelete,
+}: {
+  logs: Transaction[];
+  onDelete: (id: string) => void;
+}) {
+  if (logs.length === 0) {
+    return (
+      <p className="text-[11px] text-zinc-500 font-medium py-1 italic">
+        Your first log starts the habit ✨
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {logs.map((log) => {
+        const accent = getCategoryAccent(log.category);
+        return (
+          <div
+            key={log.id}
+            className="log-panel flex justify-between items-center gap-2 py-1.5 px-2.5"
+            style={{ borderColor: accent.border }}
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: accent.text }} />
+                <span className="text-[9px] font-bold uppercase tracking-wide truncate" style={{ color: accent.text }}>
+                  {log.category}
+                </span>
+                {log.duration_months > 1 && (
+                  <span className="text-[8px] font-bold text-blue-400/90 bg-blue-500/10 px-1 rounded">
+                    {log.duration_months}mo
+                  </span>
+                )}
+              </div>
+              <span
+                className={`text-sm font-extrabold tabular-nums leading-tight ${log.is_income ? 'text-emerald-400' : 'text-white'}`}
+              >
+                {log.is_income ? '+' : ''}
+                {formatINR(log.amount)}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg text-zinc-600 active:text-rose-400 active:bg-rose-500/10"
+              onClick={() => onDelete(log.id)}
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+/* ─── Category grid ────────────────────────────────────────────────────────── */
+
+const CategoryGrid = memo(function CategoryGrid({
+  categories,
+  ready,
+  pending,
+  onSave,
+}: {
+  categories: string[];
+  ready: boolean;
+  pending: boolean;
+  onSave: (cat: string) => void;
+}) {
+  return (
+    <div className={`category-grid ${ready ? 'category-grid--ready' : ''}`}>
+      {categories.map((cat) => {
+        const accent = getCategoryAccent(cat);
+        return (
+          <button
+            key={cat}
+            type="button"
+            disabled={!ready || pending}
+            className="category-btn"
+            style={
+              {
+                '--cat-bg': accent.bg,
+                '--cat-border': accent.border,
+                '--cat-text': accent.text,
+                '--cat-glow': accent.glow,
+              } as React.CSSProperties
+            }
+            onClick={() => onSave(cat)}
+          >
+            <span className="category-btn-emoji">{getCategoryEmoji(cat)}</span>
+            <span className="leading-tight">{cat}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+});
+
+/* ─── Date / duration controls ─────────────────────────────────────────────── */
+
+const LogControls = memo(function LogControls({
+  selectedMode,
+  customDate,
+  durationMonths,
+  hasAmount,
+  pending,
+  onModeChange,
+  onCustomDateChange,
+  onDurationChange,
+  onSaveIncome,
+  categories,
+  onSaveCategory,
+}: {
+  selectedMode: 'today' | 'yesterday' | 'custom';
+  customDate: string;
+  durationMonths: number;
+  hasAmount: boolean;
+  pending: boolean;
+  onModeChange: (mode: 'today' | 'yesterday' | 'custom') => void;
+  onCustomDateChange: (date: string) => void;
+  onDurationChange: (months: number) => void;
+  onSaveIncome: () => void;
+  categories: string[];
+  onSaveCategory: (cat: string) => void;
+}) {
+  const durationOptions = [1, 2, 3, 6, 12];
+
+  return (
+    <div className="log-controls space-y-2 pb-2">
+      <div className="flex flex-wrap gap-1.5">
+        <div className="log-panel flex items-center gap-0.5 p-0.5 flex-1 min-w-0">
+          <History className="w-3 h-3 text-zinc-500 ml-1.5 shrink-0" />
+          {(['today', 'yesterday'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={`chip flex-1 justify-center py-1.5 text-[9px] ${selectedMode === mode ? 'chip-active' : 'text-zinc-500'}`}
+              onClick={() => onModeChange(mode)}
+            >
+              {mode === 'today' ? 'Today' : 'Yest'}
+            </button>
+          ))}
+          <div className="relative shrink-0">
+            <input
+              type="date"
+              value={customDate}
+              onChange={(e) => onCustomDateChange(e.target.value)}
+              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+            />
+            <span className={`chip block py-1.5 px-2 text-[9px] ${selectedMode === 'custom' ? 'chip-active' : 'text-zinc-500'}`}>
+              Date
+            </span>
+          </div>
+        </div>
+        <div className="log-panel flex gap-0.5 p-0.5 shrink-0">
+          {durationOptions.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              className={`min-w-[2rem] py-1.5 px-1 rounded-lg text-[10px] font-extrabold ${
+                durationMonths === opt ? 'bg-white/15 text-white' : 'text-zinc-500'
+              }`}
+              onClick={() => onDurationChange(opt)}
+            >
+              {opt}m
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        disabled={!hasAmount || pending}
+        className="btn-income w-full py-2.5 rounded-xl text-xs font-extrabold tracking-wide uppercase flex items-center justify-center gap-1.5 disabled:opacity-25"
+        onClick={onSaveIncome}
+      >
+        <TrendingUp className="w-4 h-4" />
+        {pending ? 'Saving…' : 'Log Income'}
+      </button>
+
+      <CategoryGrid categories={categories} ready={hasAmount} pending={pending} onSave={onSaveCategory} />
+    </div>
+  );
+});
+
+/* ─── Main view ────────────────────────────────────────────────────────────── */
 
 export default function LogView() {
-  const [amountStr, setAmountStr] = useState('');
-  const [showToast, setShowToast] = useState(false);
+  const numpadRef = useRef<NumpadHandle>(null);
+  const [displayAmount, setDisplayAmount] = useState('');
+  const [hasAmount, setHasAmount] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
   const [durationMonths, setDurationMonths] = useState(1);
   const [selectedMode, setSelectedMode] = useState<'today' | 'yesterday' | 'custom'>('today');
   const [customDate, setCustomDate] = useState(() => formatDate(new Date()));
 
-  const { data: transactions = [] } = useTransactions();
-  const { data: categories = [] } = useCategories();
-  const { mutate: addTransaction } = useAddTransaction();
+  const { data: transactions, isLoading, isError, refetch } = useTransactions();
+  const { data: categories, isLoading: catsLoading } = useCategories();
+  const { mutate: addTransaction, isPending } = useAddTransaction();
   const { mutate: deleteTransaction } = useDeleteTransaction();
+  const { showToast } = useToast();
+  const { confirm, dialog } = useConfirm();
 
-  const durationOptions = [1, 2, 3, 6, 12];
+  const recentLogs = useMemo(() => (transactions ?? []).slice(0, 2), [transactions]);
 
-  const currentAmountNum = useMemo(() => parseFloat(amountStr) || 0, [amountStr]);
-  const recentLogs = useMemo(() => transactions.slice(0, 3), [transactions]);
+  const handleAmountChange = useCallback((str: string, num: number) => {
+    setDisplayAmount(str);
+    setHasAmount(num > 0);
+  }, []);
 
-  const getTargetDateStr = () => {
+  const getTargetDateStr = useCallback(() => {
     if (selectedMode === 'today') return formatDate(new Date());
     if (selectedMode === 'yesterday') {
       const d = new Date();
@@ -29,163 +253,87 @@ export default function LogView() {
       return formatDate(d);
     }
     return customDate;
-  };
+  }, [selectedMode, customDate]);
 
-  const handleSave = (category: string) => {
-    if (currentAmountNum <= 0) return;
-    
-    addTransaction({
-      amount: currentAmountNum,
-      category: category,
-      date: getTargetDateStr(),
-      time: formatTime(new Date()),
-      duration_months: durationMonths,
-      is_income: category === INCOME_CATEGORY
-    });
+  const handleSave = useCallback(
+    (category: string) => {
+      const amount = numpadRef.current?.getAmountNum() ?? 0;
+      if (amount <= 0 || isPending) return;
+      addTransaction(
+        {
+          amount,
+          category,
+          date: getTargetDateStr(),
+          time: formatTime(new Date()),
+          duration_months: durationMonths,
+          is_income: category === INCOME_CATEGORY,
+        },
+        {
+          onSuccess: () => {
+            numpadRef.current?.clear();
+            setDurationMonths(1);
+            setSelectedMode('today');
+            setCelebrate(true);
+            showToast(
+              isOnline() ? getSuccessMessage() : 'Saved offline — syncs when you\'re back online',
+              'success',
+            );
+          },
+          onError: (err) => showToast(getErrorMessage(err, 'Failed to log entry'), 'error'),
+        },
+      );
+    },
+    [isPending, addTransaction, getTargetDateStr, durationMonths, showToast],
+  );
 
-    setAmountStr('');
-    setDurationMonths(1);
-    setSelectedMode('today');
-    setShowToast(true);
-    setTimeout(() => setShowToast(false), 1600);
-  };
+  const handleDelete = useCallback(
+    async (id: string) => {
+      const ok = await confirm('Delete this transaction?');
+      if (!ok) return;
+      deleteTransaction(id, {
+        onSuccess: () => showToast('Deleted', 'success'),
+        onError: (err) => showToast(getErrorMessage(err, 'Failed to delete'), 'error'),
+      });
+    },
+    [confirm, deleteTransaction, showToast],
+  );
+
+  const handleCustomDateChange = useCallback((date: string) => {
+    setCustomDate(date);
+    setSelectedMode('custom');
+  }, []);
+
+  if (isLoading || catsLoading) return <LoadingScreen />;
+  if (isError) return <ErrorScreen message="Could not load data." onRetry={() => refetch()} />;
 
   return (
-    <div className="flex flex-col flex-1 h-full overflow-hidden">
-      {/* Recents */}
-      <div className="px-5 pt-8 pb-3 h-[110px] overflow-hidden flex flex-col justify-end relative">
-        {/* Fade top */}
-        <div className="absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[#0b0c10] to-transparent z-10 pointer-events-none"></div>
-        <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
+    <div className="log-page">
+      {dialog}
+      <SaveCelebration show={celebrate} onDone={() => setCelebrate(false)} />
 
-        {recentLogs.length > 0 ? (
-          recentLogs.map((log) => (
-            <div key={log.id} className="flex justify-between items-center py-2 opacity-70 hover:opacity-100 transition-opacity animate-in fade-in slide-in-from-top-2 duration-200">
-              <div className="flex flex-col">
-                <div className="flex items-center gap-2">
-                  <span className={`text-[10px] ${log.is_income ? 'text-emerald-400' : 'text-zinc-500'} font-black uppercase tracking-[0.15em]`}>
-                    {log.category} · {log.time}
-                  </span>
-                  {log.duration_months > 1 && (
-                    <span className="px-1.5 rounded-sm text-[9px] bg-blue-500/10 text-blue-400 font-bold tracking-widest">{log.duration_months}M</span>
-                  )}
-                </div>
-                <span className={`text-[16px] font-black tracking-tight ${log.is_income ? 'text-emerald-400' : 'text-white'} flex items-center gap-2`}>
-                  {log.is_income ? '+' : ''}{formatINR(log.amount)}
-                  {log.date !== formatDate(new Date()) && (
-                    <span className="text-[10px] font-bold text-zinc-500 bg-white/5 border border-white/5 px-2 py-0.5 rounded-full">{log.date}</span>
-                  )}
-                </span>
-              </div>
-              <button
-                className="w-8 h-8 flex items-center justify-center rounded-xl bg-white/5 border border-white/5 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/10 active:scale-90 transition-all"
-                onClick={() => deleteTransaction(log.id)}
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))
-        ) : (
-          <p className="h-full flex items-center justify-center text-xs text-zinc-600 font-bold tracking-widest uppercase">No recent entries</p>
-        )}
+      <section className="log-recent content-pad shrink-0 py-1.5">
+        <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-[0.2em] mb-1">Just logged</p>
+        <RecentLogs logs={recentLogs} onDelete={handleDelete} />
+      </section>
+
+      <div className="log-body content-pad">
+        <AmountDisplay amountStr={displayAmount} />
+        <LogControls
+          selectedMode={selectedMode}
+          customDate={customDate}
+          durationMonths={durationMonths}
+          hasAmount={hasAmount}
+          pending={isPending}
+          onModeChange={setSelectedMode}
+          onCustomDateChange={handleCustomDateChange}
+          onDurationChange={setDurationMonths}
+          onSaveIncome={() => handleSave(INCOME_CATEGORY)}
+          categories={(categories ?? []).filter((c) => c !== INCOME_CATEGORY)}
+          onSaveCategory={handleSave}
+        />
       </div>
 
-      {/* Amount display */}
-      <div className="flex-1 flex flex-col items-center justify-center px-6 min-h-[120px] relative">
-        <div className="absolute inset-0 bg-gradient-to-b from-blue-500/5 to-transparent pointer-events-none -z-10"></div>
-        {showToast && (
-          <div className="absolute top-2 flex items-center bg-emerald-500/20 border border-emerald-500/50 backdrop-blur-md text-emerald-400 px-5 py-2 rounded-full font-bold text-[13px] shadow-[0_0_24px_rgba(52,211,153,0.4)] z-20 animate-in fade-in slide-in-from-top-4 duration-300">
-            <CheckCircle2 className="w-4 h-4 mr-2" /> Logged Successfully
-          </div>
-        )}
-        <div className={`text-blue-500 text-3xl font-bold mb-0 transition-opacity ${amountStr ? 'opacity-100' : 'opacity-30'} shadow-blue-500/50`}>₹</div>
-        <div className="text-[72px] leading-[1] font-black tracking-tighter text-white truncate w-full text-center tabular-nums drop-shadow-[0_8px_24px_rgba(255,255,255,0.15)]">
-          {amountStr || '0'}
-        </div>
-      </div>
-
-      {/* Config ribbon: date picker + spread */}
-      <div className="flex gap-2.5 px-5 mb-4 w-full overflow-x-auto no-scrollbar relative z-10">
-        <div className="flex-none bg-[#111216]/60 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 flex items-center gap-1 shadow-inner">
-          <History className="w-4 h-4 text-zinc-500 ml-2 mr-1" />
-          {(['today', 'yesterday'] as const).map((mode) => (
-            <button
-              key={mode}
-              className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] rounded-xl transition-all duration-300
-                     ${selectedMode === mode ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-zinc-500 hover:text-zinc-400'}`}
-              onClick={() => setSelectedMode(mode)}
-            >
-              {mode === 'today' ? 'Today' : 'Yest'}
-            </button>
-          ))}
-          <div className="relative flex items-center mr-1 ml-1">
-            <input
-              type="date"
-              value={customDate}
-              onChange={(e) => {
-                setCustomDate(e.target.value);
-                setSelectedMode('custom');
-              }}
-              className="w-10 h-10 opacity-0 absolute inset-0 z-10 cursor-pointer"
-              style={{ touchAction: 'auto' }}
-            />
-            <button className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.1em] rounded-xl transition-all duration-300
-                           ${selectedMode === 'custom' ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-zinc-500 hover:text-zinc-400'}`}>
-              Custom
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-none bg-[#111216]/60 backdrop-blur-md p-1.5 rounded-2xl border border-white/5 flex gap-1 shadow-inner">
-          {durationOptions.map((opt) => (
-            <button
-              key={opt}
-              className={`w-9 py-1.5 text-[12px] font-black rounded-xl transition-all duration-300
-                     ${durationMonths === opt ? 'bg-white/10 text-white shadow-inner border border-white/5' : 'text-zinc-500 hover:text-zinc-400'}`}
-              onClick={() => setDurationMonths(opt)}
-            >
-              {opt}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Category 3-column Grid + Income chip */}
-      <div className="flex-none px-5 pb-4 relative z-10">
-        {/* Income chip */}
-        <button
-          disabled={currentAmountNum === 0}
-          className="w-full mb-3 py-3.5 rounded-[1.2rem] text-[13px] font-black tracking-[0.15em] uppercase transition-all duration-300 active:scale-[0.98]
-                 flex items-center justify-center gap-2 relative overflow-hidden group
-                 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shadow-inner
-                 disabled:opacity-30 disabled:active:scale-100 disabled:grayscale"
-          onClick={() => handleSave(INCOME_CATEGORY)}
-        >
-          <div className="absolute inset-0 bg-gradient-to-r from-emerald-400/0 via-emerald-400/10 to-emerald-400/0 -translate-x-[100%] group-hover:translate-x-[100%] transition-transform duration-1000"></div>
-          <TrendingUp className="w-5 h-5" />
-          Log Income
-        </button>
-
-        {/* Regular categories in 3-col grid */}
-        <div className="grid grid-cols-3 gap-2.5">
-          {categories.map((category) => (
-            <button
-              key={category}
-              type="button"
-              disabled={currentAmountNum === 0}
-              className="py-3.5 px-1 rounded-[1rem] text-[12px] font-bold tracking-tight transition-all duration-200 active:scale-95
-                     bg-white/5 text-zinc-300 border border-white/5 shadow-inner relative overflow-hidden
-                     disabled:opacity-30 disabled:active:scale-100
-                     hover:bg-white/10 hover:text-white hover:border-white/20"
-              onClick={() => handleSave(category)}
-            >
-              {category}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <Numpad amountStr={amountStr} setAmountStr={setAmountStr} />
+      <Numpad ref={numpadRef} onAmountChange={handleAmountChange} />
     </div>
   );
 }

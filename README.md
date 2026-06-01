@@ -39,9 +39,9 @@ Protected by **OAuth2 JWT Token Authentication**, your financial data is complet
 
 ### Backend
 - **Framework:** Python 3 + FastAPI
-- **Database:** PostgreSQL
+- **Database:** SQLite (local dev) or PostgreSQL (production)
 - **ORM & Migrations:** SQLAlchemy + Alembic
-- **Authentication:** JWT (python-jose, passlib, bcrypt)
+- **Authentication:** JWT (python-jose, bcrypt)
 - **Background Tasks:** APScheduler
 
 ---
@@ -49,7 +49,7 @@ Protected by **OAuth2 JWT Token Authentication**, your financial data is complet
 ## 📥 Local Development Setup
 
 ### 1. Backend Setup
-Ensure you have Python 3.10+ and PostgreSQL installed and running.
+Ensure you have Python 3.10+ installed.
 
 ```bash
 # Navigate to the backend directory
@@ -63,14 +63,14 @@ source .venv/bin/activate  # Or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
 
 # Configure your environment variables (.env)
-echo "DATABASE_URL=postgresql://user:password@localhost/expense_db" > .env
-echo "SECRET_KEY=your_super_secret_jwt_key" >> .env
+cp .env.example .env
+# Default uses SQLite — no database server required for local dev
 
-# Run database migrations
+# Run database migrations (optional — tables are also created on startup)
 alembic upgrade head
 
 # Start the FastAPI server
-fastapi dev app/main.py
+uvicorn app.main:app --reload --port 8000
 ```
 > **Note:** The backend Swagger API documentation is available at `http://localhost:8000/docs`.
 
@@ -87,7 +87,23 @@ npm install
 # Start the Vite development server
 npm run dev
 ```
-> **Note:** The frontend application will be available at `http://localhost:5173`.
+> **Note:** The frontend application will be available at `http://localhost:5173`. API requests are proxied to the backend at port 8000.
+
+### 3. First Use
+1. Open `http://localhost:5173` in your browser.
+2. **Register** a new account (or sign in if you already have one).
+3. Start logging expenses — all data is stored on the server.
+
+### 4. Android / Play Store
+See **[docs/PLAY_STORE.md](docs/PLAY_STORE.md)** for the full publication guide.
+
+```bash
+cd frontend
+echo "VITE_API_URL=https://your-api.com/api" > .env.production
+npm run build
+npx cap sync
+npm run cap:android   # opens Android Studio → build signed AAB
+```
 
 ---
 

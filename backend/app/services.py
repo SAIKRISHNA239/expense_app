@@ -40,10 +40,11 @@ def _first_of_month(d: date) -> date:
 
 
 def _next_month(d: date) -> date:
-    """Advance exactly one month (handles year rollover)."""
-    if d.month == 12:
-        return d.replace(year=d.year + 1, month=1)
-    return d.replace(month=d.month + 1)
+    """Advance exactly one month (handles year rollover and day clamping)."""
+    first = _first_of_month(d)
+    if first.month == 12:
+        return first.replace(year=first.year + 1, month=1, day=1)
+    return first.replace(month=first.month + 1, day=1)
 
 
 def _format_date(d: date) -> str:
@@ -120,7 +121,7 @@ def calculate_dashboard(
     # Upcoming liability buckets for next 3 months
     upcoming_burdens: dict[str, Decimal] = {}
     for i in range(1, 4):
-        cursor = now
+        cursor = _first_of_month(now)
         for _ in range(i):
             cursor = _next_month(cursor)
         upcoming_burdens[_ym(cursor)] = ZERO
@@ -218,84 +219,90 @@ def calculate_dashboard(
 
 # ─── Auto-billing service ──────────────────────────────────────────────────────
 
-def run_auto_billing(db: Session) -> int:
+def run_auto_billing(db: Session, user_id: str | None = None) -> int:
     """
-    Port of store.ts `runAutoBilling`.
-
-    Idempotent: safe to call multiple times. For each AutoPay rule, it:
-    1. Finds the most recently billed Auto-Pay transaction for that rule
-       (matched by amount — same logic as the original).
-    2. Walks forward month by month from the last-billed month (or the
-       current month if never billed) to the current month.
-    3. Inserts a billing record for any month where today >= billing_day.
-
-    Returns the number of new transaction records created.
+    Idempotent auto-billing. Matches rules by auto_pay_id (not amount).
+    If user_id is None, bills all users (scheduler path).
     """
     now = datetime.now()
     today = now.date()
     current_ym = _ym(today)
 
-    auto_pays = crud.get_auto_pays(db)
-    all_txs = crud.get_transactions(db)
-
-    # Index existing Auto-Pay transactions by amount for fast lookup
-    ap_txs_by_amount: dict[str, list[models.Transaction]] = {}
-    for tx in all_txs:
-        if tx.category == AUTO_PAY_CATEGORY:
-            key = str(tx.amount)
-            ap_txs_by_amount.setdefault(key, []).append(tx)
+    if user_id:
+        pays_by_user: dict[str, list[models.AutoPay]] = {
+            user_id: crud.get_auto_pays(db, user_id)
+        }
+    else:
+        pays_by_user = {}
+        for ap in crud.get_all_auto_pays(db):
+            pays_by_user.setdefault(ap.user_id, []).append(ap)
 
     created_count = 0
 
-    for ap in auto_pays:
-        amount_key = str(ap.amount)
-        matching_txs = ap_txs_by_amount.get(amount_key, [])
+    for uid, auto_pays in pays_by_user.items():
+        all_txs = crud.get_transactions(db, uid)
 
-        # Find most recent billing date for this autopay
-        if matching_txs:
-            matching_txs.sort(
-                key=lambda t: t.date if isinstance(t.date, date) else date.fromisoformat(str(t.date)),
-                reverse=True,
-            )
-            last_date = (
-                matching_txs[0].date
-                if isinstance(matching_txs[0].date, date)
-                else date.fromisoformat(str(matching_txs[0].date))
-            )
-            # Start from the month AFTER the last billed month
-            process_date = _next_month(_first_of_month(last_date))
-        else:
-            # Never billed: start from the first of the current month
-            process_date = _first_of_month(today)
+        ap_txs_by_rule: dict[str, list[models.Transaction]] = {}
+        for tx in all_txs:
+            if tx.category == AUTO_PAY_CATEGORY and tx.auto_pay_id:
+                ap_txs_by_rule.setdefault(tx.auto_pay_id, []).append(tx)
 
-        # Walk forward until we exceed the current month
-        while _ym(process_date) <= current_ym:
-            py, pm = process_date.year, process_date.month
+        for ap in auto_pays:
+            matching_txs = ap_txs_by_rule.get(ap.id, [])
 
-            # Clamp billing day to last day of this month (e.g., 31 in Feb → 28/29)
-            last_day = monthrange(py, pm)[1]
-            effective_day = min(ap.billing_day, last_day)
-
-            is_current_month = _ym(process_date) == current_ym
-            day_has_passed = today.day >= effective_day
-
-            if not is_current_month or day_has_passed:
-                bill_date = date(py, pm, effective_day)
-                bill_datetime = datetime(py, pm, effective_day, 0, 0, 0)
-
-                new_tx = models.Transaction(
-                    id=str(uuid.uuid4()),
-                    amount=ap.amount,
-                    category=AUTO_PAY_CATEGORY,
-                    date=bill_date,
-                    time=_format_time(bill_datetime),
-                    duration_months=1,
-                    is_income=False,
+            if matching_txs:
+                matching_txs.sort(
+                    key=lambda t: t.date if isinstance(t.date, date) else date.fromisoformat(str(t.date)),
+                    reverse=True,
                 )
-                db.add(new_tx)
-                created_count += 1
+                last_date = (
+                    matching_txs[0].date
+                    if isinstance(matching_txs[0].date, date)
+                    else date.fromisoformat(str(matching_txs[0].date))
+                )
+                process_date = _next_month(_first_of_month(last_date))
+            else:
+                process_date = _first_of_month(today)
 
-            process_date = _next_month(process_date)
+            billed_months = {
+                _ym(t.date if isinstance(t.date, date) else date.fromisoformat(str(t.date)))
+                for t in matching_txs
+            }
+
+            while _ym(process_date) <= current_ym:
+                py, pm = process_date.year, process_date.month
+                target_ym = _ym(process_date)
+
+                if target_ym in billed_months:
+                    process_date = _next_month(process_date)
+                    continue
+
+                last_day = monthrange(py, pm)[1]
+                effective_day = min(ap.billing_day, last_day)
+
+                is_current_month = target_ym == current_ym
+                day_has_passed = today.day >= effective_day
+
+                if not is_current_month or day_has_passed:
+                    bill_date = date(py, pm, effective_day)
+                    bill_datetime = datetime(py, pm, effective_day, 0, 0, 0)
+
+                    new_tx = models.Transaction(
+                        id=str(uuid.uuid4()),
+                        user_id=uid,
+                        amount=ap.amount,
+                        category=AUTO_PAY_CATEGORY,
+                        date=bill_date,
+                        time=_format_time(bill_datetime),
+                        duration_months=1,
+                        is_income=False,
+                        auto_pay_id=ap.id,
+                    )
+                    db.add(new_tx)
+                    billed_months.add(target_ym)
+                    created_count += 1
+
+                process_date = _next_month(process_date)
 
     if created_count > 0:
         db.commit()
