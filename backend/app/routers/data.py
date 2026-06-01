@@ -80,6 +80,7 @@ def export_data(
                 "time": t.time,
                 "durationMonths": t.duration_months,
                 "isIncome": t.is_income,
+                **({"autoPayId": t.auto_pay_id} if t.auto_pay_id else {}),
             }
             for t in txs
         ],

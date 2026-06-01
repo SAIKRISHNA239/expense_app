@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, memo, useRef } from 'react';
-import { Trash2, History, TrendingUp } from 'lucide-react';
+import { Trash2, Calendar, TrendingUp, Layers } from 'lucide-react';
 import Numpad, { type NumpadHandle } from './Numpad';
 import SaveCelebration from './SaveCelebration';
 import { useTransactions, useCategories, useAddTransaction, useDeleteTransaction } from './hooks';
@@ -10,79 +10,156 @@ import { getCategoryAccent } from './categoryColors';
 import { getCategoryEmoji } from './categoryIcons';
 import { getLogPrompt, getSuccessMessage } from './dailyStats';
 import { isOnline } from './network';
+import { addQuickAmount, formatAmountDisplay, parseAmountNum } from './logAmount';
 import type { Transaction } from './api';
-import { INCOME_CATEGORY, formatDate, formatTime, formatINR, getErrorMessage } from './utils';
+import {
+  INCOME_CATEGORY,
+  formatDate,
+  formatTime,
+  formatINR,
+  getErrorMessage,
+  parseLocalDate,
+} from './utils';
+
+const QUICK_AMOUNTS = [
+  { label: '+100', value: 100 },
+  { label: '+500', value: 500 },
+  { label: '+1K', value: 1000 },
+  { label: '+5K', value: 5000 },
+] as const;
+
+const DURATION_OPTIONS = [1, 2, 3, 6, 12] as const;
+
+function formatLogDateLabel(mode: 'today' | 'yesterday' | 'custom', customDate: string): string {
+  if (mode === 'today') return 'Today';
+  if (mode === 'yesterday') return 'Yesterday';
+  const d = parseLocalDate(customDate);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
+function formatRecentTime(dateStr: string, timeStr: string): string {
+  const today = formatDate(new Date());
+  if (dateStr === today) return timeStr || 'Today';
+  const d = parseLocalDate(dateStr);
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (dateStr === formatDate(yesterday)) return 'Yesterday';
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
 
 const AmountDisplay = memo(function AmountDisplay({ amountStr }: { amountStr: string }) {
-  const hasAmount = (parseFloat(amountStr) || 0) > 0;
+  const num = parseAmountNum(amountStr);
+  const hasAmount = num > 0;
   const prompt = getLogPrompt(hasAmount);
+  const display = hasAmount ? formatAmountDisplay(amountStr) : '0';
+
   return (
-    <section className="log-amount py-2 text-center">
+    <section className="log-amount" aria-live="polite" aria-atomic="true">
       <p className={`log-prompt ${hasAmount ? 'log-prompt--active' : ''}`}>{prompt}</p>
-      <span className={`text-xl font-bold ${hasAmount ? 'text-teal-400' : 'text-zinc-700'}`}>₹</span>
-      <div
-        className={`amount-hero font-extrabold tabular-nums truncate ${
-          hasAmount ? 'amount-hero--live' : 'text-zinc-800'
-        }`}
-      >
-        {amountStr || '0'}
+      <div className="log-amount-row">
+        <span className={`log-currency ${hasAmount ? 'log-currency--live' : ''}`}>₹</span>
+        <div
+          className={`amount-hero font-extrabold tabular-nums truncate ${
+            hasAmount ? 'amount-hero--live' : 'text-zinc-800'
+          }`}
+        >
+          {display}
+        </div>
       </div>
+      {hasAmount && (
+        <p className="log-amount-sub">{formatINR(num)} · tap a category below</p>
+      )}
     </section>
   );
 });
 
-/* ─── Recent entries ───────────────────────────────────────────────────────── */
+const QuickAmounts = memo(function QuickAmounts({
+  disabled,
+  onPick,
+}: {
+  disabled: boolean;
+  onPick: (delta: number) => void;
+}) {
+  return (
+    <div className="log-quick-amounts">
+      {QUICK_AMOUNTS.map(({ label, value }) => (
+        <button
+          key={value}
+          type="button"
+          disabled={disabled}
+          className="log-quick-btn"
+          onClick={() => onPick(value)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+});
 
 const RecentLogs = memo(function RecentLogs({
   logs,
   onDelete,
+  deletingId,
 }: {
   logs: Transaction[];
   onDelete: (id: string) => void;
+  deletingId: string | null;
 }) {
   if (logs.length === 0) {
     return (
-      <p className="text-[11px] text-zinc-500 font-medium py-1 italic">
-        Your first log starts the habit ✨
-      </p>
+      <div className="log-empty-recent">
+        <span className="text-lg">✨</span>
+        <p>No entries yet — log your first expense below</p>
+      </div>
     );
   }
 
   return (
-    <div className="space-y-1">
+    <div className="log-recent-list">
       {logs.map((log) => {
         const accent = getCategoryAccent(log.category);
+        const emoji = getCategoryEmoji(log.category);
         return (
           <div
             key={log.id}
-            className="log-panel flex justify-between items-center gap-2 py-1.5 px-2.5"
-            style={{ borderColor: accent.border }}
+            className="log-recent-item"
+            style={{ borderColor: accent.border, background: accent.bg }}
           >
+            <span className="log-recent-emoji" aria-hidden>
+              {emoji}
+            </span>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1 flex-wrap">
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: accent.text }} />
-                <span className="text-[9px] font-bold uppercase tracking-wide truncate" style={{ color: accent.text }}>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold truncate" style={{ color: accent.text }}>
                   {log.category}
                 </span>
                 {log.duration_months > 1 && (
-                  <span className="text-[8px] font-bold text-blue-400/90 bg-blue-500/10 px-1 rounded">
-                    {log.duration_months}mo
-                  </span>
+                  <span className="log-recent-badge">{log.duration_months}mo spread</span>
                 )}
               </div>
-              <span
-                className={`text-sm font-extrabold tabular-nums leading-tight ${log.is_income ? 'text-emerald-400' : 'text-white'}`}
-              >
-                {log.is_income ? '+' : ''}
-                {formatINR(log.amount)}
-              </span>
+              <div className="flex items-baseline justify-between gap-2 mt-0.5">
+                <span
+                  className={`text-sm font-extrabold tabular-nums ${
+                    log.is_income ? 'text-emerald-400' : 'text-white'
+                  }`}
+                >
+                  {log.is_income ? '+' : ''}
+                  {formatINR(log.amount)}
+                </span>
+                <span className="text-[9px] text-zinc-500 font-semibold shrink-0">
+                  {formatRecentTime(log.date, log.time)}
+                </span>
+              </div>
             </div>
             <button
               type="button"
-              className="w-7 h-7 shrink-0 flex items-center justify-center rounded-lg text-zinc-600 active:text-rose-400 active:bg-rose-500/10"
+              className="log-recent-delete"
+              disabled={deletingId === log.id}
               onClick={() => onDelete(log.id)}
+              aria-label={`Delete ${log.category} ${formatINR(log.amount)}`}
             >
-              <Trash2 className="w-3 h-3" />
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
         );
@@ -91,29 +168,38 @@ const RecentLogs = memo(function RecentLogs({
   );
 });
 
-/* ─── Category grid ────────────────────────────────────────────────────────── */
-
 const CategoryGrid = memo(function CategoryGrid({
   categories,
   ready,
   pending,
+  savingCategory,
   onSave,
 }: {
   categories: string[];
   ready: boolean;
   pending: boolean;
+  savingCategory: string | null;
   onSave: (cat: string) => void;
 }) {
+  if (categories.length === 0) {
+    return (
+      <p className="log-no-categories">
+        No categories yet. Add them in Settings → Categories.
+      </p>
+    );
+  }
+
   return (
     <div className={`category-grid ${ready ? 'category-grid--ready' : ''}`}>
       {categories.map((cat) => {
         const accent = getCategoryAccent(cat);
+        const isSaving = savingCategory === cat;
         return (
           <button
             key={cat}
             type="button"
             disabled={!ready || pending}
-            className="category-btn"
+            className={`category-btn ${isSaving ? 'category-btn--saving' : ''}`}
             style={
               {
                 '--cat-bg': accent.bg,
@@ -123,9 +209,11 @@ const CategoryGrid = memo(function CategoryGrid({
               } as React.CSSProperties
             }
             onClick={() => onSave(cat)}
+            aria-label={`Log expense under ${cat}`}
           >
             <span className="category-btn-emoji">{getCategoryEmoji(cat)}</span>
-            <span className="leading-tight">{cat}</span>
+            <span className="category-btn-label">{cat}</span>
+            {isSaving && <span className="category-btn-spinner" />}
           </button>
         );
       })}
@@ -133,14 +221,13 @@ const CategoryGrid = memo(function CategoryGrid({
   );
 });
 
-/* ─── Date / duration controls ─────────────────────────────────────────────── */
-
 const LogControls = memo(function LogControls({
   selectedMode,
   customDate,
   durationMonths,
   hasAmount,
   pending,
+  savingCategory,
   onModeChange,
   onCustomDateChange,
   onDurationChange,
@@ -153,6 +240,7 @@ const LogControls = memo(function LogControls({
   durationMonths: number;
   hasAmount: boolean;
   pending: boolean;
+  savingCategory: string | null;
   onModeChange: (mode: 'today' | 'yesterday' | 'custom') => void;
   onCustomDateChange: (date: string) => void;
   onDurationChange: (months: number) => void;
@@ -160,67 +248,91 @@ const LogControls = memo(function LogControls({
   categories: string[];
   onSaveCategory: (cat: string) => void;
 }) {
-  const durationOptions = [1, 2, 3, 6, 12];
+  const dateLabel = formatLogDateLabel(selectedMode, customDate);
 
   return (
-    <div className="log-controls space-y-2 pb-2">
-      <div className="flex flex-wrap gap-1.5">
-        <div className="log-panel flex items-center gap-0.5 p-0.5 flex-1 min-w-0">
-          <History className="w-3 h-3 text-zinc-500 ml-1.5 shrink-0" />
-          {(['today', 'yesterday'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`chip flex-1 justify-center py-1.5 text-[9px] ${selectedMode === mode ? 'chip-active' : 'text-zinc-500'}`}
-              onClick={() => onModeChange(mode)}
-            >
-              {mode === 'today' ? 'Today' : 'Yest'}
-            </button>
-          ))}
-          <div className="relative shrink-0">
-            <input
-              type="date"
-              value={customDate}
-              onChange={(e) => onCustomDateChange(e.target.value)}
-              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-            />
-            <span className={`chip block py-1.5 px-2 text-[9px] ${selectedMode === 'custom' ? 'chip-active' : 'text-zinc-500'}`}>
-              Date
-            </span>
+    <div className="log-controls">
+      <div className="log-meta-row">
+        <div className="log-meta-group">
+          <span className="log-meta-label">
+            <Calendar className="w-3 h-3" />
+            Date
+          </span>
+          <div className="log-date-chips">
+            {(['today', 'yesterday'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`log-date-chip ${selectedMode === mode ? 'log-date-chip--active' : ''}`}
+                onClick={() => onModeChange(mode)}
+              >
+                {mode === 'today' ? 'Today' : 'Yesterday'}
+              </button>
+            ))}
+            <label className={`log-date-chip log-date-chip--pick ${selectedMode === 'custom' ? 'log-date-chip--active' : ''}`}>
+              <input
+                type="date"
+                value={customDate}
+                max={formatDate(new Date())}
+                onChange={(e) => onCustomDateChange(e.target.value)}
+                className="log-date-input"
+              />
+              Pick
+            </label>
           </div>
         </div>
-        <div className="log-panel flex gap-0.5 p-0.5 shrink-0">
-          {durationOptions.map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              className={`min-w-[2rem] py-1.5 px-1 rounded-lg text-[10px] font-extrabold ${
-                durationMonths === opt ? 'bg-white/15 text-white' : 'text-zinc-500'
-              }`}
-              onClick={() => onDurationChange(opt)}
-            >
-              {opt}m
-            </button>
-          ))}
+
+        <div className="log-meta-group log-meta-group--spread">
+          <span className="log-meta-label" title="Split cost across months in your budget">
+            <Layers className="w-3 h-3" />
+            Spread
+          </span>
+          <div className="log-spread-chips">
+            {DURATION_OPTIONS.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                className={`log-spread-chip ${durationMonths === opt ? 'log-spread-chip--active' : ''}`}
+                onClick={() => onDurationChange(opt)}
+              >
+                {opt}m
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
+      <p className="log-target-date">
+        Logging to <strong>{dateLabel}</strong>
+        {durationMonths > 1 && (
+          <span className="text-zinc-500"> · spread over {durationMonths} months</span>
+        )}
+      </p>
 
       <button
         type="button"
         disabled={!hasAmount || pending}
-        className="btn-income w-full py-2.5 rounded-xl text-xs font-extrabold tracking-wide uppercase flex items-center justify-center gap-1.5 disabled:opacity-25"
+        className="btn-income log-income-btn"
         onClick={onSaveIncome}
+        aria-label="Log as income"
       >
-        <TrendingUp className="w-4 h-4" />
-        {pending ? 'Saving…' : 'Log Income'}
+        <TrendingUp className="w-4 h-4 shrink-0" />
+        {pending && savingCategory === INCOME_CATEGORY ? 'Saving…' : 'Log as income'}
       </button>
 
-      <CategoryGrid categories={categories} ready={hasAmount} pending={pending} onSave={onSaveCategory} />
+      <div>
+        <p className="log-section-label">Expense categories</p>
+        <CategoryGrid
+          categories={categories}
+          ready={hasAmount}
+          pending={pending}
+          savingCategory={savingCategory}
+          onSave={onSaveCategory}
+        />
+      </div>
     </div>
   );
 });
-
-/* ─── Main view ────────────────────────────────────────────────────────────── */
 
 export default function LogView() {
   const numpadRef = useRef<NumpadHandle>(null);
@@ -230,6 +342,8 @@ export default function LogView() {
   const [durationMonths, setDurationMonths] = useState(1);
   const [selectedMode, setSelectedMode] = useState<'today' | 'yesterday' | 'custom'>('today');
   const [customDate, setCustomDate] = useState(() => formatDate(new Date()));
+  const [savingCategory, setSavingCategory] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const { data: transactions, isLoading, isError, refetch } = useTransactions();
   const { data: categories, isLoading: catsLoading } = useCategories();
@@ -238,11 +352,21 @@ export default function LogView() {
   const { showToast } = useToast();
   const { confirm, dialog } = useConfirm();
 
-  const recentLogs = useMemo(() => (transactions ?? []).slice(0, 2), [transactions]);
+  const recentLogs = useMemo(() => (transactions ?? []).slice(0, 3), [transactions]);
+  const expenseCategories = useMemo(
+    () => (categories ?? []).filter((c) => c !== INCOME_CATEGORY),
+    [categories],
+  );
 
   const handleAmountChange = useCallback((str: string, num: number) => {
     setDisplayAmount(str);
     setHasAmount(num > 0);
+  }, []);
+
+  const handleQuickAmount = useCallback((delta: number) => {
+    const current = numpadRef.current?.getAmountStr() ?? '';
+    const next = addQuickAmount(current, delta);
+    numpadRef.current?.setAmount(next);
   }, []);
 
   const getTargetDateStr = useCallback(() => {
@@ -259,6 +383,8 @@ export default function LogView() {
     (category: string) => {
       const amount = numpadRef.current?.getAmountNum() ?? 0;
       if (amount <= 0 || isPending) return;
+
+      setSavingCategory(category);
       addTransaction(
         {
           amount,
@@ -275,11 +401,12 @@ export default function LogView() {
             setSelectedMode('today');
             setCelebrate(true);
             showToast(
-              isOnline() ? getSuccessMessage() : 'Saved offline — syncs when you\'re back online',
+              isOnline() ? getSuccessMessage() : "Saved offline — syncs when you're back online",
               'success',
             );
           },
           onError: (err) => showToast(getErrorMessage(err, 'Failed to log entry'), 'error'),
+          onSettled: () => setSavingCategory(null),
         },
       );
     },
@@ -290,9 +417,11 @@ export default function LogView() {
     async (id: string) => {
       const ok = await confirm('Delete this transaction?');
       if (!ok) return;
+      setDeletingId(id);
       deleteTransaction(id, {
         onSuccess: () => showToast('Deleted', 'success'),
         onError: (err) => showToast(getErrorMessage(err, 'Failed to delete'), 'error'),
+        onSettled: () => setDeletingId(null),
       });
     },
     [confirm, deleteTransaction, showToast],
@@ -304,31 +433,45 @@ export default function LogView() {
   }, []);
 
   if (isLoading || catsLoading) return <LoadingScreen />;
-  if (isError) return <ErrorScreen message="Could not load data." onRetry={() => refetch()} />;
+  if (isError) {
+    return (
+      <ErrorScreen
+        message="Couldn't load your log data. Check your connection and try again."
+        onRetry={() => refetch()}
+      />
+    );
+  }
 
   return (
     <div className="log-page">
       {dialog}
       <SaveCelebration show={celebrate} onDone={() => setCelebrate(false)} />
 
-      <section className="log-recent content-pad shrink-0 py-1.5">
-        <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-[0.2em] mb-1">Just logged</p>
-        <RecentLogs logs={recentLogs} onDelete={handleDelete} />
+      <section className="log-recent content-pad">
+        <div className="log-recent-header">
+          <h2 className="log-section-label mb-0">Recent</h2>
+          {recentLogs.length > 0 && (
+            <span className="log-recent-count">{recentLogs.length} latest</span>
+          )}
+        </div>
+        <RecentLogs logs={recentLogs} onDelete={handleDelete} deletingId={deletingId} />
       </section>
 
       <div className="log-body content-pad">
         <AmountDisplay amountStr={displayAmount} />
+        <QuickAmounts disabled={isPending} onPick={handleQuickAmount} />
         <LogControls
           selectedMode={selectedMode}
           customDate={customDate}
           durationMonths={durationMonths}
           hasAmount={hasAmount}
           pending={isPending}
+          savingCategory={savingCategory}
           onModeChange={setSelectedMode}
           onCustomDateChange={handleCustomDateChange}
           onDurationChange={setDurationMonths}
           onSaveIncome={() => handleSave(INCOME_CATEGORY)}
-          categories={(categories ?? []).filter((c) => c !== INCOME_CATEGORY)}
+          categories={expenseCategories}
           onSaveCategory={handleSave}
         />
       </div>

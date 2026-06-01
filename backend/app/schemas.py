@@ -14,7 +14,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ─── Transaction ─────────────────────────────────────────────────────────────
@@ -42,6 +42,7 @@ class TransactionOut(BaseModel):
     time: str
     duration_months: int
     is_income: bool
+    auto_pay_id: Optional[str] = None
 
 
 # ─── AutoPay ─────────────────────────────────────────────────────────────────
@@ -117,9 +118,30 @@ class LegacyImportPayload(BaseModel):
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
 
-class UserCreate(BaseModel):
+class UserRegister(BaseModel):
+    """Sign-up body — validated before account creation."""
+
     username: str = Field(..., min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9_-]+$")
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=8, max_length=72)
+    confirm_password: str = Field(..., min_length=8, max_length=72)
+
+    @field_validator("username")
+    @classmethod
+    def strip_username(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("password")
+    @classmethod
+    def password_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Password cannot be empty or whitespace only")
+        return v
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "UserRegister":
+        if self.password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        return self
 
 
 class UserOut(BaseModel):
@@ -130,9 +152,16 @@ class UserOut(BaseModel):
 
 
 class Token(BaseModel):
-    """Returned by the login endpoint."""
+    """Returned by the login endpoint (legacy shape)."""
     access_token: str
     token_type: str = "bearer"
+
+
+class AuthResponse(BaseModel):
+    """Login / register — token plus user profile (one round-trip)."""
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
 
 
 class TokenData(BaseModel):

@@ -1,5 +1,19 @@
-import { useState, useEffect, useRef } from 'react';
-import { Settings, Save, Trash2, Download, Upload, Plus, Tag, TriangleAlert } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import {
+  SlidersHorizontal,
+  Save,
+  Trash2,
+  Download,
+  Upload,
+  Plus,
+  Tag,
+  TriangleAlert,
+  Wallet,
+  CalendarClock,
+  Shield,
+  FileJson,
+  Repeat,
+} from 'lucide-react';
 import {
   useCategories,
   useAutoPays,
@@ -17,12 +31,158 @@ import { api } from './api';
 import { useToast } from './Toast';
 import { useConfirm } from './useConfirm';
 import { LoadingScreen, ErrorScreen } from './LoadingScreen';
-import { getErrorMessage } from './utils';
+import { formatINR, getErrorMessage } from './utils';
+import { getCategoryEmoji } from './categoryIcons';
+import { getCategoryAccent } from './categoryColors';
+import {
+  formatBillingDay,
+  parseMoneyInput,
+  isValidAutoPayDay,
+  isValidAutoPayAmount,
+} from './manageUtils';
+import type { AutoPay } from './api';
 
 interface ManageViewProps {
   onShowPrivacy: () => void;
   onAccountDeleted: () => void;
 }
+
+/* ─── Shared UI ─────────────────────────────────────────────────────────────── */
+
+const SetSection = memo(function SetSection({
+  id,
+  icon: Icon,
+  title,
+  subtitle,
+  children,
+  variant = 'default',
+}: {
+  id?: string;
+  icon: typeof Wallet;
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  variant?: 'default' | 'danger';
+}) {
+  return (
+    <section
+      id={id}
+      className={`set-section ${variant === 'danger' ? 'set-section--danger' : ''}`}
+    >
+      <div className="set-section-head">
+        <div className={`set-section-icon ${variant === 'danger' ? 'set-section-icon--danger' : ''}`}>
+          <Icon className="w-4 h-4" aria-hidden />
+        </div>
+        <div className="min-w-0">
+          <h2 className="set-section-title">{title}</h2>
+          {subtitle && <p className="set-section-sub">{subtitle}</p>}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+});
+
+const MoneyField = memo(function MoneyField({
+  id,
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="set-field">
+      <label htmlFor={id} className="set-label">
+        {label}
+      </label>
+      {hint && <p className="set-hint">{hint}</p>}
+      <div className="set-money-wrap">
+        <span className="set-money-prefix" aria-hidden>
+          ₹
+        </span>
+        <input
+          id={id}
+          type="number"
+          inputMode="decimal"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="input-field set-money-input"
+        />
+      </div>
+    </div>
+  );
+});
+
+const CategoryChip = memo(function CategoryChip({
+  name,
+  onRemove,
+}: {
+  name: string;
+  onRemove: (name: string) => void;
+}) {
+  const accent = getCategoryAccent(name);
+  const emoji = getCategoryEmoji(name);
+
+  return (
+    <div
+      className="set-cat-chip"
+      style={{ background: accent.bg, borderColor: accent.border }}
+    >
+      <span className="set-cat-emoji" aria-hidden>
+        {emoji}
+      </span>
+      <span className="set-cat-name">{name}</span>
+      <button
+        type="button"
+        className="set-cat-remove"
+        onClick={() => onRemove(name)}
+        aria-label={`Remove category ${name}`}
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+});
+
+const AutoPayRow = memo(function AutoPayRow({
+  ap,
+  onDelete,
+}: {
+  ap: AutoPay;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="set-ap-row">
+      <div className="set-ap-icon" aria-hidden>
+        <Repeat className="w-4 h-4" />
+      </div>
+      <div className="set-ap-body min-w-0">
+        <p className="set-ap-name">{ap.name}</p>
+        <p className="set-ap-meta">
+          <CalendarClock className="w-3 h-3 inline -mt-0.5" />
+          Bills on the {formatBillingDay(ap.billing_day)}
+        </p>
+      </div>
+      <span className="set-ap-amt">{formatINR(Number(ap.amount))}</span>
+      <button
+        type="button"
+        className="set-ap-delete"
+        onClick={() => onDelete(ap.id)}
+        aria-label={`Remove auto-pay ${ap.name}`}
+      >
+        <Trash2 className="w-4 h-4" />
+      </button>
+    </div>
+  );
+});
+
+/* ─── Main view ─────────────────────────────────────────────────────────────── */
 
 export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageViewProps) {
   const queryClient = useQueryClient();
@@ -61,24 +221,27 @@ export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageVi
     }
   }, [budgetState]);
 
-  const saveBudgetSettings = () => {
+  const saveBudgetSettings = useCallback(() => {
     updateBudgetConfig.mutate(
       {
-        monthly_income: parseFloat(incomeInput) || 0,
-        base_budget: parseFloat(budgetInput) || 0,
-        rollover_amount: parseFloat(rolloverInput) || 0,
+        monthly_income: parseMoneyInput(incomeInput),
+        base_budget: parseMoneyInput(budgetInput),
+        rollover_amount: parseMoneyInput(rolloverInput),
       },
       {
-        onSuccess: () => showToast('Budget saved', 'success'),
+        onSuccess: () => showToast('Budget settings saved', 'success'),
         onError: (err) => showToast(getErrorMessage(err, 'Failed to save budget'), 'error'),
       }
     );
-  };
+  }, [incomeInput, budgetInput, rolloverInput, updateBudgetConfig, showToast]);
 
-  const handleAddAutoPay = () => {
+  const handleAddAutoPay = useCallback(() => {
     const amt = parseFloat(apAmount);
-    const day = parseInt(apDay);
-    if (!apName.trim() || isNaN(amt) || amt <= 0 || isNaN(day) || day < 1 || day > 31) return;
+    const day = parseInt(apDay, 10);
+    if (!apName.trim() || !isValidAutoPayAmount(amt) || !isValidAutoPayDay(day)) {
+      showToast('Enter a name, amount, and billing day (1–31)', 'error');
+      return;
+    }
 
     addAutoPay.mutate(
       { name: apName.trim(), amount: amt, billing_day: day },
@@ -92,13 +255,17 @@ export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageVi
         onError: (err) => showToast(getErrorMessage(err, 'Failed to add auto-pay'), 'error'),
       }
     );
-  };
+  }, [apName, apAmount, apDay, addAutoPay, showToast]);
 
-  const handleAddCategory = () => {
+  const handleAddCategory = useCallback(() => {
     setCatError('');
     const name = newCategory.trim();
-    if (!name || (categories ?? []).includes(name)) {
-      setCatError('Already exists or empty');
+    if (!name) {
+      setCatError('Enter a category name');
+      return;
+    }
+    if ((categories ?? []).includes(name)) {
+      setCatError('Category already exists');
       return;
     }
     addCategory.mutate(name, {
@@ -108,28 +275,31 @@ export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageVi
       },
       onError: (err) => setCatError(getErrorMessage(err, 'Failed to add category')),
     });
-  };
+  }, [newCategory, categories, addCategory, showToast]);
 
-  const initiateRemoveCategory = (cat: string) => {
-    const affected = (transactions ?? []).filter((t) => t.category === cat).length;
-    if (affected > 0) {
-      setCategoryToRemove(cat);
-      setAffectedTxsCount(affected);
-      const others = (categories ?? []).filter((c) => c !== cat);
-      setReplacementCategory(others[0] ?? 'Misc');
-      setShowCategoryModal(true);
-    } else {
-      deleteCategory.mutate(
-        { name: cat },
-        {
-          onSuccess: () => showToast('Category removed', 'success'),
-          onError: (err) => showToast(getErrorMessage(err, 'Failed to remove category'), 'error'),
-        }
-      );
-    }
-  };
+  const initiateRemoveCategory = useCallback(
+    (cat: string) => {
+      const affected = (transactions ?? []).filter((t) => t.category === cat).length;
+      if (affected > 0) {
+        setCategoryToRemove(cat);
+        setAffectedTxsCount(affected);
+        const others = (categories ?? []).filter((c) => c !== cat);
+        setReplacementCategory(others[0] ?? 'Misc');
+        setShowCategoryModal(true);
+      } else {
+        deleteCategory.mutate(
+          { name: cat },
+          {
+            onSuccess: () => showToast('Category removed', 'success'),
+            onError: (err) => showToast(getErrorMessage(err, 'Failed to remove category'), 'error'),
+          }
+        );
+      }
+    },
+    [transactions, categories, deleteCategory, showToast]
+  );
 
-  const confirmRemoveCategory = () => {
+  const confirmRemoveCategory = useCallback(() => {
     deleteCategory.mutate(
       { name: categoryToRemove, reassignTo: replacementCategory },
       {
@@ -141,56 +311,62 @@ export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageVi
         onError: (err) => showToast(getErrorMessage(err, 'Failed to remove category'), 'error'),
       }
     );
-  };
+  }, [categoryToRemove, replacementCategory, deleteCategory, showToast]);
 
-  const handleExport = async () => {
+  const handleExport = useCallback(async () => {
     try {
       const data = await api.exportData();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `expense-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `spendly-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
       showToast('Backup downloaded', 'success');
     } catch (err) {
       showToast(getErrorMessage(err, 'Export failed'), 'error');
     }
-  };
+  }, [showToast]);
 
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
+  const handleImportFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      e.target.value = '';
 
-    const ok = await confirm('Import will merge this backup into your account. Continue?');
-    if (!ok) return;
+      const ok = await confirm('Import will merge this backup into your account. Continue?');
+      if (!ok) return;
 
-    setImporting(true);
-    try {
-      const text = await file.text();
-      const payload = JSON.parse(text);
-      await api.importData(payload);
-      invalidateAllData(queryClient);
-      showToast('Import complete', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Import failed — check file format'), 'error');
-    } finally {
-      setImporting(false);
-    }
-  };
+      setImporting(true);
+      try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        await api.importData(payload);
+        invalidateAllData(queryClient);
+        showToast('Import complete', 'success');
+      } catch (err) {
+        showToast(getErrorMessage(err, 'Import failed — check file format'), 'error');
+      } finally {
+        setImporting(false);
+      }
+    },
+    [confirm, queryClient, showToast]
+  );
 
-  const handleDeleteAutoPay = async (id: string) => {
-    const ok = await confirm('Remove this auto-pay rule? Past bills stay in history.');
-    if (!ok) return;
-    deleteAutoPay.mutate(id, {
-      onSuccess: () => showToast('Auto-pay removed', 'success'),
-      onError: (err) => showToast(getErrorMessage(err, 'Failed to remove'), 'error'),
-    });
-  };
+  const handleDeleteAutoPay = useCallback(
+    async (id: string) => {
+      const ok = await confirm('Remove this auto-pay rule? Past bills stay in history.');
+      if (!ok) return;
+      deleteAutoPay.mutate(id, {
+        onSuccess: () => showToast('Auto-pay removed', 'success'),
+        onError: (err) => showToast(getErrorMessage(err, 'Failed to remove'), 'error'),
+      });
+    },
+    [confirm, deleteAutoPay, showToast]
+  );
 
-  const handleDeleteAccount = async () => {
+  const handleDeleteAccount = useCallback(async () => {
     const ok = await confirm(
       'Permanently delete your account and ALL data? This cannot be undone. Export a backup first if needed.'
     );
@@ -202,184 +378,244 @@ export default function ManageView({ onShowPrivacy, onAccountDeleted }: ManageVi
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to delete account'), 'error');
     }
-  };
-
-  const ordinal = (n: number) =>
-    n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+  }, [confirm, onAccountDeleted, showToast]);
 
   if (catsLoading || apLoading || budgetLoading) return <LoadingScreen />;
   if (isError) return <ErrorScreen message="Could not load settings." onRetry={() => refetch()} />;
 
   const catList = categories ?? [];
   const apList = autoPays ?? [];
+  const reassignOptions = catList.filter((c) => c !== categoryToRemove);
 
   return (
-    <div className="page-scroll h-full">
+    <div className="page-scroll h-full set-page">
       {dialog}
 
-      <div className="content-pad pt-2 pb-4">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 border border-white/10 flex items-center justify-center">
-          <Settings className="w-5 h-5 text-amber-400" />
+      <header className="set-header content-pad">
+        <div className="set-header-top">
+          <div>
+            <h1 className="set-title">Settings</h1>
+            <p className="set-header-sub">
+              {catList.length} categories · {apList.length} auto-pay{apList.length === 1 ? '' : 's'}
+            </p>
+          </div>
+          <div className="set-header-icon" aria-hidden>
+            <SlidersHorizontal className="w-5 h-5" />
+          </div>
         </div>
-        <h1 className="section-title text-white">Manage</h1>
-      </div>
+      </header>
 
-      <section className="glass-card p-5 mb-6">
-        <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Global Math Variables</h2>
-        <div className="space-y-4">
-          {[
-            { id: 'incomeInput', label: 'Assumed Monthly Income', value: incomeInput, set: setIncomeInput },
-            { id: 'budgetInput', label: 'Budget Cap (chart scaling)', value: budgetInput, set: setBudgetInput },
-            { id: 'rolloverInput', label: 'Initial Rollover', value: rolloverInput, set: setRolloverInput },
-          ].map(({ id, label, value, set }) => (
-            <div key={id} className="flex flex-col">
-              <label htmlFor={id} className="text-[10px] font-black text-white/50 uppercase tracking-wider mb-1.5 ml-1">{label}</label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">₹</span>
-                <input
-                  id={id}
-                  type="number"
-                  value={value}
-                  onChange={(e) => set(e.target.value)}
-                  className="w-full bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3 pl-9 pr-3 text-white font-bold focus:outline-none focus:border-blue-500/50"
-                />
-              </div>
-            </div>
-          ))}
+      <div className="set-content content-pad pb-8">
+        <SetSection
+          id="budget"
+          icon={Wallet}
+          title="Budget & income"
+          subtitle="Powers safe-to-spend on your Overview tab"
+        >
+          <div className="set-fields">
+            <MoneyField
+              id="incomeInput"
+              label="Monthly income"
+              hint="Used to calculate how much you can safely spend"
+              value={incomeInput}
+              onChange={setIncomeInput}
+            />
+            <MoneyField
+              id="budgetInput"
+              label="Monthly budget cap"
+              hint="Optional ceiling for charts and planning"
+              value={budgetInput}
+              onChange={setBudgetInput}
+            />
+            <MoneyField
+              id="rolloverInput"
+              label="Starting rollover"
+              hint="Balance carried into this month"
+              value={rolloverInput}
+              onChange={setRolloverInput}
+            />
+          </div>
           <button
-            className="w-full bg-blue-500/10 text-blue-400 border border-blue-500/20 py-3 rounded-xl font-bold flex items-center justify-center gap-2"
+            type="button"
+            className="set-save-btn btn-primary"
             onClick={saveBudgetSettings}
             disabled={updateBudgetConfig.isPending}
           >
-            <Save className="w-4 h-4" /> {updateBudgetConfig.isPending ? 'Saving…' : 'Save Variables'}
+            <Save className="w-4 h-4" />
+            {updateBudgetConfig.isPending ? 'Saving…' : 'Save budget'}
           </button>
-        </div>
-      </section>
+        </SetSection>
 
-      <section className="glass-card p-5 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Tag className="w-4 h-4 text-zinc-500" />
-          <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest">Expense Categories</h2>
-        </div>
-        <div className="flex flex-wrap gap-2.5 mb-5">
-          {catList.map((cat) => (
-            <div key={cat} className="flex items-center gap-1.5 bg-white/5 border border-white/5 rounded-full px-3.5 py-1.5">
-              <span className="text-[13px] font-bold text-white">{cat}</span>
-              <button className="text-rose-500 hover:bg-rose-500/80 rounded-full p-1" onClick={() => initiateRemoveCategory(cat)}>
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+        <SetSection icon={Tag} title="Categories" subtitle="Used when logging expenses">
+          {catList.length > 0 ? (
+            <div className="set-cat-grid">
+              {catList.map((cat) => (
+                <CategoryChip key={cat} name={cat} onRemove={initiateRemoveCategory} />
+              ))}
             </div>
-          ))}
-        </div>
-        {showCategoryModal && (
-          <div className="bg-rose-500/5 p-4 rounded-xl mb-5 border border-rose-500/10">
-            <p className="text-[13px] text-white mb-3">Reassign <span className="text-rose-400 font-bold">{affectedTxsCount}</span> transactions to:</p>
-            <div className="flex flex-col gap-2">
-              <select value={replacementCategory} onChange={(e) => setReplacementCategory(e.target.value)} className="bg-[#0b0c10] border border-white/5 rounded-lg py-2.5 px-3 text-white font-bold">
-                {catList.filter((c) => c !== categoryToRemove).map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
+          ) : (
+            <p className="set-empty-inline">No categories yet — add one below.</p>
+          )}
+
+          {showCategoryModal && (
+            <div className="set-reassign-panel" role="dialog" aria-labelledby="reassign-title">
+              <p id="reassign-title" className="set-reassign-text">
+                <span className="set-reassign-count">{affectedTxsCount}</span> transactions use{' '}
+                <strong>{categoryToRemove}</strong>. Reassign them to:
+              </p>
+              <select
+                value={replacementCategory}
+                onChange={(e) => setReplacementCategory(e.target.value)}
+                className="input-field"
+              >
+                {reassignOptions.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
                 ))}
               </select>
-              <div className="flex gap-2">
-                <button onClick={confirmRemoveCategory} className="flex-1 bg-rose-500/10 text-rose-500 border border-rose-500/20 py-2.5 rounded-lg font-bold">Apply & Delete</button>
-                <button onClick={() => setShowCategoryModal(false)} className="flex-1 bg-white/5 text-white border border-white/5 py-2.5 rounded-lg font-bold">Cancel</button>
+              <div className="set-reassign-actions">
+                <button type="button" className="set-btn-ghost" onClick={() => setShowCategoryModal(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="set-btn-danger" onClick={confirmRemoveCategory}>
+                  Reassign & remove
+                </button>
               </div>
             </div>
-          </div>
-        )}
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={newCategory}
-            onChange={(e) => setNewCategory(e.target.value)}
-            placeholder="New category name"
-            className="flex-1 bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3 px-4 text-white font-bold"
-            onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
-          />
-          <button className="bg-blue-500/10 text-blue-400 border border-blue-500/20 px-4 rounded-xl" onClick={handleAddCategory}>
-            <Plus className="w-5 h-5" />
-          </button>
-        </div>
-        {catError && <p className="text-rose-400 text-xs mt-2 font-bold">{catError}</p>}
-      </section>
+          )}
 
-      <section className="glass-card p-5 mb-6">
-        <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Add Auto-Pay</h2>
-        <div className="space-y-3 mb-5">
-          <input type="text" value={apName} onChange={(e) => setApName(e.target.value)} placeholder="Name (e.g. Netflix)"
-            className="w-full bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold" />
-          <div className="flex gap-3">
-            <input type="number" value={apAmount} onChange={(e) => setApAmount(e.target.value)} placeholder="Amount"
-              className="flex-[2] bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold" />
-            <input type="number" value={apDay} onChange={(e) => setApDay(e.target.value)} min={1} max={31} placeholder="Day"
-              className="flex-1 bg-[#0b0c10]/80 border border-white/5 rounded-xl py-3.5 px-4 text-white font-bold" />
+          <div className="set-add-row">
+            <input
+              type="text"
+              value={newCategory}
+              onChange={(e) => {
+                setNewCategory(e.target.value);
+                if (catError) setCatError('');
+              }}
+              placeholder="New category"
+              className={`input-field flex-1 ${catError ? 'input-field--error' : ''}`}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddCategory()}
+            />
+            <button
+              type="button"
+              className="set-add-btn"
+              onClick={handleAddCategory}
+              disabled={addCategory.isPending}
+              aria-label="Add category"
+            >
+              <Plus className="w-5 h-5" />
+            </button>
           </div>
-        </div>
-        <button className="w-full bg-white/5 text-white border border-white/10 py-3.5 rounded-xl font-bold" onClick={handleAddAutoPay}>
-          Save Auto-Pay Rule
-        </button>
-      </section>
+          {catError && <p className="set-field-error">{catError}</p>}
+        </SetSection>
 
-      {apList.length > 0 && (
-        <section className="mb-8">
-          <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Active Auto-Pays</h2>
-          <div className="space-y-3">
-            {apList.map((ap) => (
-              <div key={ap.id} className="flex items-center justify-between glass-card p-4">
-                <div>
-                  <p className="font-bold text-[15px] text-white">{ap.name}</p>
-                  <p className="text-[11px] text-zinc-500 font-bold uppercase">Bills on the {ordinal(ap.billing_day)}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="font-black text-rose-400">₹{Number(ap.amount).toLocaleString('en-IN')}</span>
-                  <button className="w-8 h-8 flex items-center justify-center bg-white/5 rounded-full text-zinc-500 hover:text-rose-500" onClick={() => handleDeleteAutoPay(ap.id)}>
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+        <SetSection
+          icon={Repeat}
+          title="Auto-pay"
+          subtitle="Recurring bills logged automatically each month"
+        >
+          <div className="set-fields set-fields--compact">
+            <input
+              type="text"
+              value={apName}
+              onChange={(e) => setApName(e.target.value)}
+              placeholder="Name (e.g. Netflix)"
+              className="input-field"
+            />
+            <div className="set-ap-form-row">
+              <div className="set-money-wrap flex-1">
+                <span className="set-money-prefix" aria-hidden>
+                  ₹
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={apAmount}
+                  onChange={(e) => setApAmount(e.target.value)}
+                  placeholder="Amount"
+                  className="input-field set-money-input"
+                />
               </div>
-            ))}
+              <input
+                type="number"
+                inputMode="numeric"
+                value={apDay}
+                onChange={(e) => setApDay(e.target.value)}
+                min={1}
+                max={31}
+                placeholder="Day"
+                className="input-field set-ap-day"
+                aria-label="Billing day of month"
+              />
+            </div>
           </div>
-        </section>
-      )}
-
-      <section className="glass-card p-5 mb-6">
-        <h2 className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-4">Backup & Restore</h2>
-        <p className="text-[11px] text-zinc-500 mb-4">Export your data regularly. Import merges a backup into your account.</p>
-        <div className="flex gap-2">
-          <button onClick={handleExport} className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
-            <Download className="w-4 h-4" /> Export
-          </button>
           <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importing}
-            className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 font-bold disabled:opacity-50"
+            type="button"
+            className="set-save-btn set-save-btn--secondary"
+            onClick={handleAddAutoPay}
+            disabled={addAutoPay.isPending}
           >
-            <Upload className="w-4 h-4" /> {importing ? 'Importing…' : 'Import'}
+            {addAutoPay.isPending ? 'Adding…' : 'Add auto-pay'}
           </button>
-          <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={handleImportFile} />
-        </div>
-      </section>
 
-      <section className="bg-rose-950/20 rounded-[1.5rem] p-5 border border-rose-900/50 mb-8">
-        <div className="flex items-center gap-2 mb-2">
-          <TriangleAlert className="w-5 h-5 text-rose-500" />
-          <h2 className="text-[11px] font-bold text-rose-500 uppercase tracking-widest">Account</h2>
-        </div>
-        <p className="text-[11px] text-zinc-400 font-medium mb-4">Your data is private to your account. Export backups before switching devices.</p>
-        <button
-          onClick={onShowPrivacy}
-          className="w-full mb-2 py-2.5 rounded-xl bg-white/5 border border-white/10 text-zinc-300 text-[13px] font-bold"
+          {apList.length > 0 && (
+            <div className="set-ap-list">
+              <p className="set-list-label">Active rules</p>
+              {apList.map((ap) => (
+                <AutoPayRow key={ap.id} ap={ap} onDelete={handleDeleteAutoPay} />
+              ))}
+            </div>
+          )}
+        </SetSection>
+
+        <SetSection
+          icon={FileJson}
+          title="Backup & restore"
+          subtitle="Export regularly; import merges a JSON backup"
         >
-          Privacy Policy
-        </button>
-        <button
-          onClick={handleDeleteAccount}
-          className="w-full py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[13px] font-bold"
+          <div className="set-backup-actions">
+            <button type="button" className="set-backup-btn set-backup-btn--export" onClick={handleExport}>
+              <Download className="w-4 h-4" />
+              Export JSON
+            </button>
+            <button
+              type="button"
+              className="set-backup-btn set-backup-btn--import"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+            >
+              <Upload className="w-4 h-4" />
+              {importing ? 'Importing…' : 'Import'}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleImportFile}
+            />
+          </div>
+        </SetSection>
+
+        <SetSection
+          icon={Shield}
+          title="Account & privacy"
+          subtitle="Your data stays on your account only"
+          variant="danger"
         >
-          Delete Account & All Data
-        </button>
-      </section>
+          <p className="set-danger-copy">
+            Export a backup before switching devices. Deleting your account removes all transactions,
+            categories, and settings permanently.
+          </p>
+          <button type="button" className="set-btn-ghost set-btn-full" onClick={onShowPrivacy}>
+            Privacy policy
+          </button>
+          <button type="button" className="set-btn-danger set-btn-full" onClick={handleDeleteAccount}>
+            <TriangleAlert className="w-4 h-4" />
+            Delete account & all data
+          </button>
+        </SetSection>
       </div>
     </div>
   );

@@ -69,7 +69,7 @@ export default function EditTransactionModal({
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               disabled={isAutoPay}
-              className="w-full bg-[#0b0c10] border border-white/5 rounded-xl py-3 px-4 text-white font-bold disabled:opacity-50"
+              className="input-field disabled:opacity-50"
             />
           </div>
           <div>
@@ -78,7 +78,7 @@ export default function EditTransactionModal({
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               disabled={isAutoPay}
-              className="w-full bg-[#0b0c10] border border-white/5 rounded-xl py-3 px-4 text-white font-bold disabled:opacity-50"
+              className="input-field disabled:opacity-50"
             >
               {allCategories.map((c) => (
                 <option key={c} value={c}>{c}</option>
@@ -92,7 +92,7 @@ export default function EditTransactionModal({
               value={date}
               onChange={(e) => setDate(e.target.value)}
               disabled={isAutoPay}
-              className="w-full bg-[#0b0c10] border border-white/5 rounded-xl py-3 px-4 text-white font-bold disabled:opacity-50"
+              className="input-field disabled:opacity-50"
             />
           </div>
           {!transaction.is_income && category !== INCOME_CATEGORY && (
@@ -102,7 +102,7 @@ export default function EditTransactionModal({
                 value={durationMonths}
                 onChange={(e) => setDurationMonths(Number(e.target.value))}
                 disabled={isAutoPay}
-                className="w-full bg-[#0b0c10] border border-white/5 rounded-xl py-3 px-4 text-white font-bold disabled:opacity-50"
+                className="input-field disabled:opacity-50"
               >
                 {[1, 2, 3, 6, 12].map((n) => (
                   <option key={n} value={n}>{n} month{n > 1 ? 's' : ''}</option>
@@ -124,7 +124,7 @@ export default function EditTransactionModal({
             <button
               type="submit"
               disabled={isPending}
-              className="flex-1 py-3 rounded-xl bg-gradient-to-r from-blue-500/25 to-blue-600/20 border border-blue-500/40 text-blue-300 font-bold disabled:opacity-50 active:scale-[0.98] transition-transform"
+              className="flex-1 py-3 rounded-xl btn-primary disabled:opacity-50"
             >
               {isPending ? 'Saving…' : 'Save'}
             </button>

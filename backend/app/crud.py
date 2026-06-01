@@ -10,7 +10,7 @@ from datetime import date as date_type
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import asc, delete, desc, select
+from sqlalchemy import asc, delete, desc, func, select, update
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -104,6 +104,8 @@ def delete_transaction(db: Session, user_id: str, tx_id: str) -> bool:
     tx = get_transaction(db, user_id, tx_id)
     if tx is None:
         return False
+    if tx.auto_pay_id:
+        return False  # auto-billed entries must not be deleted (billing idempotency)
     db.delete(tx)
     db.commit()
     return True
@@ -177,6 +179,15 @@ def delete_auto_pay(db: Session, user_id: str, ap_id: str) -> bool:
     ap = db.get(models.AutoPay, ap_id)
     if ap is None or ap.user_id != user_id:
         return False
+    # Keep billed transactions in history; detach from rule so FK does not block delete
+    db.execute(
+        update(models.Transaction)
+        .where(
+            models.Transaction.user_id == user_id,
+            models.Transaction.auto_pay_id == ap_id,
+        )
+        .values(auto_pay_id=None)
+    )
     db.delete(ap)
     db.commit()
     return True
@@ -186,12 +197,14 @@ def bulk_upsert_auto_pays(db: Session, user_id: str, aps: list[dict]) -> int:
     count = 0
     for raw in aps:
         ap_id = str(raw.get("id", _new_id()))
+        name = str(raw.get("name", "")).strip()
+        amount = Decimal(str(raw.get("amount", 0)))
+        billing_day = int(raw.get("billingDay", raw.get("billing_day", 1)))
+        if not name or amount <= 0 or billing_day < 1 or billing_day > 31:
+            continue
+
         existing = db.get(models.AutoPay, ap_id)
-        fields = dict(
-            name=raw.get("name", ""),
-            amount=Decimal(str(raw.get("amount", 0))),
-            billing_day=int(raw.get("billingDay", raw.get("billing_day", 1))),
-        )
+        fields = dict(name=name, amount=amount, billing_day=billing_day)
         if existing and existing.user_id == user_id:
             for k, v in fields.items():
                 setattr(existing, k, v)
@@ -210,6 +223,17 @@ def get_categories(db: Session, user_id: str) -> list[models.Category]:
         .where(models.Category.user_id == user_id)
         .order_by(asc(models.Category.name))
     ).scalars().all()
+
+
+def count_transactions_with_category(db: Session, user_id: str, name: str) -> int:
+    return db.execute(
+        select(func.count())
+        .select_from(models.Transaction)
+        .where(
+            models.Transaction.user_id == user_id,
+            models.Transaction.category == name,
+        )
+    ).scalar_one()
 
 
 def category_exists(db: Session, user_id: str, name: str) -> bool:
@@ -244,6 +268,10 @@ def delete_category(
         )
     ).scalar_one_or_none()
     if cat is None or name in RESERVED_CATEGORIES:
+        return False
+
+    tx_count = count_transactions_with_category(db, user_id, name)
+    if tx_count > 0 and not reassign_to:
         return False
 
     if reassign_to and category_exists(db, user_id, reassign_to):

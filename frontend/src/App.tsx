@@ -10,6 +10,7 @@ import PrivacyPolicy from './lib/PrivacyPolicy';
 import { api, initAuth, setAuthToken } from './lib/api';
 import { getStoredToken, getStoredUsername, setStoredUsername } from './lib/storage';
 import { hydrateQueryCache, cacheFromServer } from './lib/offlineSync';
+import { localDb } from './lib/localDb';
 import { queryClient } from './lib/queryClient';
 import { isOnline } from './lib/network';
 import { PenLine, PieChart, Clock3, SlidersHorizontal } from 'lucide-react';
@@ -76,8 +77,16 @@ export default function App() {
     })();
   }, []);
 
+  const clearSessionData = async () => {
+    await localDb.clearAll();
+    queryClient.clear();
+  };
+
   useEffect(() => {
-    const handleLogout = () => setIsAuthenticated(false);
+    const handleLogout = async () => {
+      await clearSessionData();
+      setIsAuthenticated(false);
+    };
     window.addEventListener('auth:logout', handleLogout);
     return () => window.removeEventListener('auth:logout', handleLogout);
   }, []);
@@ -85,6 +94,7 @@ export default function App() {
   const handleLogout = async () => {
     await setAuthToken(null);
     await setStoredUsername(null);
+    await clearSessionData();
     setUsername('');
     setIsAuthenticated(false);
   };

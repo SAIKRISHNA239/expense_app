@@ -1,69 +1,78 @@
 import { memo, useCallback, useState, useImperativeHandle, forwardRef } from 'react';
 import { Delete } from 'lucide-react';
+import { applyNumpadKey, parseAmountNum } from './logAmount';
 
 export interface NumpadHandle {
   getAmountNum: () => number;
+  getAmountStr: () => string;
   clear: () => void;
+  setAmount: (str: string) => void;
 }
 
 interface NumpadProps {
   onAmountChange: (amountStr: string, amountNum: number) => void;
 }
 
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'delete'] as const;
+
 const Numpad = forwardRef<NumpadHandle, NumpadProps>(function Numpad({ onAmountChange }, ref) {
   const [amountStr, setAmountStr] = useState('');
 
-  useImperativeHandle(ref, () => ({
-    getAmountNum: () => parseFloat(amountStr) || 0,
-    clear: () => {
-      setAmountStr('');
-      onAmountChange('', 0);
-    },
-  }));
-
-  const update = useCallback(
+  const emit = useCallback(
     (next: string) => {
       setAmountStr(next);
-      onAmountChange(next, parseFloat(next) || 0);
+      onAmountChange(next, parseAmountNum(next));
     },
     [onAmountChange],
   );
 
+  useImperativeHandle(ref, () => ({
+    getAmountNum: () => parseAmountNum(amountStr),
+    getAmountStr: () => amountStr,
+    clear: () => emit(''),
+    setAmount: (str: string) => emit(str),
+  }));
+
   const handlePress = useCallback(
     (key: string) => {
-      if (key === 'delete') {
-        update(amountStr.slice(0, -1));
-      } else if (key === '.') {
-        if (amountStr.includes('.')) return;
-        update(amountStr === '' ? '0.' : amountStr + '.');
-      } else {
-        update(amountStr === '0' ? key : amountStr + key);
-      }
+      emit(applyNumpadKey(amountStr, key));
     },
-    [amountStr, update],
+    [amountStr, emit],
   );
 
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'delete'] as const;
-
   return (
-    <div className="log-numpad relative z-20 shrink-0 select-none touch-none content-pad pt-2 pb-[calc(5rem+env(safe-area-inset-bottom))]">
-      <div className="grid grid-cols-3 gap-1.5 sm:gap-2 mt-2">
-        {keys.map((key) => (
+    <div className="log-numpad relative z-20 shrink-0 select-none touch-none content-pad">
+      <div className="log-numpad-handle" aria-hidden />
+      <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+        {KEYS.map((key) => (
           <button
             key={key}
             type="button"
-            className="numpad-key text-white tabular-nums"
+            className={`numpad-key text-white tabular-nums ${key === 'delete' ? 'numpad-key--action' : ''}`}
             onPointerDown={(e) => e.preventDefault()}
             onClick={() => handlePress(key)}
+            aria-label={
+              key === 'delete' ? 'Delete last digit' : key === '.' ? 'Decimal point' : `Digit ${key}`
+            }
           >
             {key === 'delete' ? (
-              <Delete className="w-[clamp(1rem,4.5vw,1.5rem)] h-[clamp(1rem,4.5vw,1.5rem)] text-zinc-400" />
+              <Delete className="w-[clamp(1rem,4.5vw,1.5rem)] h-[clamp(1rem,4.5vw,1.5rem)]" />
             ) : (
               key
             )}
           </button>
         ))}
       </div>
+      {amountStr.length > 0 && (
+        <button
+          type="button"
+          className="log-clear-btn"
+          onClick={() => emit('')}
+          aria-label="Clear amount"
+        >
+          Clear amount
+        </button>
+      )}
     </div>
   );
 });

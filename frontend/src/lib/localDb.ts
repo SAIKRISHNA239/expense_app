@@ -148,6 +148,18 @@ export const localDb = {
     });
   },
 
+  /** Wipe cache and pending mutations (logout / account delete). */
+  async clearAll(): Promise<void> {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([CACHE_STORE, QUEUE_STORE], 'readwrite');
+      tx.objectStore(CACHE_STORE).clear();
+      tx.objectStore(QUEUE_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
   async getQueueLength(): Promise<number> {
     const q = await localDb.getQueue();
     return q.length;

@@ -5,6 +5,7 @@ Revises: 0002_add_users
 Create Date: 2026-05-31
 """
 
+import uuid
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -68,13 +69,14 @@ def upgrade() -> None:
     op.create_index("ix_categories_new_user_id", "categories_new", ["user_id"])
 
     if default_user:
-        conn.execute(
-            sa.text(
-                "INSERT INTO categories_new (id, user_id, name) "
-                "SELECT lower(hex(randomblob(16))), :uid, name FROM categories"
-            ),
-            {"uid": default_user},
-        )
+        old_names = conn.execute(sa.text("SELECT name FROM categories")).fetchall()
+        for (cat_name,) in old_names:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO categories_new (id, user_id, name) VALUES (:id, :uid, :name)"
+                ),
+                {"id": str(uuid.uuid4()), "uid": default_user, "name": cat_name},
+            )
 
     op.drop_table("categories")
     op.rename_table("categories_new", "categories")

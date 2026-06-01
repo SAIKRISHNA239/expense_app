@@ -1,14 +1,15 @@
 """
 Auth router — register and login endpoints.
 
-POST /api/auth/register  — create a new user account
-POST /api/auth/login     — exchange credentials for a JWT (OAuth2 password flow)
-GET  /api/auth/me        — return the currently authenticated user's info
-DELETE /api/auth/me      — permanently delete account and all data (Play Store requirement)
+POST /api/auth/register  — create account + return JWT (auto sign-in)
+POST /api/auth/login     — exchange credentials for JWT + user profile
+GET  /api/auth/me        — return the currently authenticated user
+DELETE /api/auth/me      — permanently delete account and all data
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
@@ -18,49 +19,71 @@ from app.database import get_db
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+def _normalize_username(username: str) -> str:
+    return username.strip()
+
+
+def _find_user_by_username(db: Session, username: str) -> models.User | None:
+    """Case-insensitive username lookup."""
+    normalized = _normalize_username(username)
+    return (
+        db.query(models.User)
+        .filter(func.lower(models.User.username) == normalized.lower())
+        .first()
+    )
+
+
+def _auth_response(user: models.User) -> schemas.AuthResponse:
+    token = create_access_token(user.username)
+    return schemas.AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        user=schemas.UserOut.model_validate(user),
+    )
+
+
 @router.post(
     "/register",
-    response_model=schemas.UserOut,
+    response_model=schemas.AuthResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Register a new user account",
+    summary="Create account and sign in",
 )
-def register(payload: schemas.UserCreate, db: Session = Depends(get_db)):
-    # Reject duplicate usernames
-    existing = db.query(models.User).filter(models.User.username == payload.username).first()
-    if existing:
+def register(payload: schemas.UserRegister, db: Session = Depends(get_db)):
+    username = _normalize_username(payload.username)
+
+    if _find_user_by_username(db, username):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Username '{payload.username}' is already taken.",
+            detail="This username is already taken. Try another one.",
         )
 
     user = models.User(
-        username=payload.username,
+        username=username,
         hashed_password=hash_password(payload.password),
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     crud.seed_user_defaults(db, user.id)
-    return user
+    return _auth_response(user)
 
 
 @router.post(
     "/login",
-    response_model=schemas.Token,
-    summary="Login and receive a JWT (OAuth2 Password Flow)",
+    response_model=schemas.AuthResponse,
+    summary="Sign in with username and password",
 )
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     """
-    Accepts `username` + `password` as form fields (OAuth2 standard).
-    Returns a Bearer token to include in the Authorization header for all
-    subsequent requests.
-
-    In Swagger UI: click the 🔒 Authorize button at the top of the page.
+    OAuth2 password flow — send `username` and `password` as form fields.
+    Returns a Bearer token and user profile.
     """
-    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    username = _normalize_username(form_data.username)
+    user = _find_user_by_username(db, username)
+
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -68,8 +91,7 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = create_access_token(user.username)
-    return schemas.Token(access_token=token, token_type="bearer")
+    return _auth_response(user)
 
 
 @router.get(
@@ -78,7 +100,6 @@ def login(
     summary="Return the currently authenticated user",
 )
 def get_me(current_user: models.User = Depends(get_current_user)):
-    """Use this endpoint to verify that your token is valid."""
     return current_user
 
 
@@ -91,11 +112,6 @@ def delete_account(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Required for Google Play Store apps that allow registration.
-    Deletes the user, all transactions, categories, auto-pays, and budget settings.
-    This action is irreversible.
-    """
     ok = crud.delete_user_account(db, current_user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")

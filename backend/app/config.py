@@ -8,7 +8,10 @@ class Settings(BaseSettings):
     ENV: str = "development"
 
     # Comma-separated allowed origins, e.g. https://app.example.com,capacitor://localhost
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173"
+    CORS_ORIGINS: str = (
+        "http://localhost:5173,http://localhost:4173,http://127.0.0.1:5173,"
+        "capacitor://localhost,https://localhost,http://localhost"
+    )
 
     # JWT settings — MUST set SECRET_KEY in production
     SECRET_KEY: str = "change-me-in-production-use-openssl-rand-hex-32"

@@ -45,6 +45,14 @@ def delete_category(
 ):
     if reassign_to and not crud.category_exists(db, current_user.id, reassign_to):
         raise HTTPException(status_code=400, detail=f"Reassign target '{reassign_to}' does not exist.")
+
+    tx_count = crud.count_transactions_with_category(db, current_user.id, name)
+    if tx_count > 0 and not reassign_to:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Category has {tx_count} transaction(s). Provide reassign_to to move them first.",
+        )
+
     ok = crud.delete_category(db, current_user.id, name, reassign_to)
     if not ok:
         raise HTTPException(status_code=404, detail="Category not found or reserved")

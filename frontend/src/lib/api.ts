@@ -29,12 +29,16 @@ export const setAuthToken = async (token: string | null) => {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    const url = String(error.config?.url ?? '');
+    const isAuthAttempt =
+      url.includes('/auth/login') || url.includes('/auth/register');
+
+    if (error.response?.status === 401 && !isAuthAttempt) {
       await setAuthToken(null);
       window.dispatchEvent(new Event('auth:logout'));
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -47,6 +51,7 @@ export interface Transaction {
   time: string;
   duration_months: number;
   is_income: boolean;
+  auto_pay_id?: string | null;
 }
 
 export type TransactionCreate = Omit<Transaction, 'id'>;
@@ -91,19 +96,33 @@ export interface AuthToken {
   token_type: string;
 }
 
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
+}
+
 // ─── API Functions ──────────────────────────────────────────────────────────
 
 export const api = {
-  register: async (username: string, password: string): Promise<User> => {
-    const response = await apiClient.post<User>('/auth/register', { username, password });
+  register: async (
+    username: string,
+    password: string,
+    confirmPassword: string,
+  ): Promise<AuthResponse> => {
+    const response = await apiClient.post<AuthResponse>('/auth/register', {
+      username: username.trim(),
+      password,
+      confirm_password: confirmPassword,
+    });
     return response.data;
   },
 
-  login: async (username: string, password: string): Promise<AuthToken> => {
+  login: async (username: string, password: string): Promise<AuthResponse> => {
     const params = new URLSearchParams();
-    params.append('username', username);
+    params.append('username', username.trim());
     params.append('password', password);
-    const response = await apiClient.post<AuthToken>('/auth/login', params, {
+    const response = await apiClient.post<AuthResponse>('/auth/login', params, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
     return response.data;

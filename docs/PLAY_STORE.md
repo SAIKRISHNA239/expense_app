@@ -1,5 +1,7 @@
 # Play Store Publication Guide
 
+Documentation index: [README.md](README.md)
+
 This app is a **React + Capacitor** Android wrapper around a **FastAPI** backend. Follow these steps to publish on Google Play.
 
 ## Checklist before submission
@@ -38,6 +40,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Use PostgreSQL in production. Terminate TLS at your reverse proxy.
+
+---
+
+## Personal phone testing (debug APK, no Play Store)
+
+See **[INSTALL_DEBUG_APK.md](INSTALL_DEBUG_APK.md)** — build `app-debug.apk`, copy to your phone, and install.
+
+Quick version:
+
+```bash
+cd frontend
+./scripts/build-debug-apk.sh 192.168.1.42   # your PC Wi‑Fi IP
+# APK: android/app/build/outputs/apk/debug/app-debug.apk
+```
 
 ---
 

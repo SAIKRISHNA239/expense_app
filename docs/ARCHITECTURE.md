@@ -1,90 +1,130 @@
-# Premium Expense Manager: Architecture & Data Flow
+# Architecture
 
-This document details the internal architecture, state management lifecycle, and underlying algorithms governing the Expense App. It is designed to be the definitive reference manual for maintaining, scaling, and reading the codebase.
+Spendly is a **client–server** app: a React SPA (web + Capacitor Android) talks to a FastAPI backend. All financial data is scoped by `user_id`.
 
----
-
-## 🏗️ System Architecture
-
-The application is structured as a **Client-Side Single Page Application (SPA)** that runs 100% offline. 
-It leverages modern reactive capabilities combined with an asynchronous IndexedDB wrapper for high-performance offline persistence.
-
-### Tech Stack
-- **Frontend Framework:** Svelte 5 (using modern `$state`, `$derived`, `$props` Runes)
-- **State Management:** Svelte primitives (`writable()`, `derived()`, `get()`)
-- **Persistence Layer:** `Dexie.js` (IndexedDB Wrapper)
-- **Styling UI:** Tailwind CSS (Custom App Theme variables combined with arbitrary variant classes like `group-focus-within`)
-
----
-
-## 🗄️ Persistence & State Hydration 
-
-Because manipulating vast arrays of historical data synchronusly causes main-thread blocking, the app separates the **Persistence Layer** (Disk/IndexedDB) from the **Reactivity Layer** (Svelte Stores/Memory).
-
-### Boot Sequence (`src/lib/store.ts`)
-1. **Empty Mount:** On initial load, the basic `.svelte` components mount immediately, bound to empty `writable` arrays (`transactions`, `autoPays`, etc.). This guarantees `< 50ms` TTI (Time to Interactive).
-2. **`initDbAndMigrate()` Execution:** 
-   - A single connection to the `ExpenseAppDB` Dexie database is initialized.
-   - The engine checks for legacy `zff_tx_v3` local storage properties. If they exist, it aggressively intercepts them, formats them to the new schema, bulk-inserts them natively to IndexedDB, and strips the old `localStorage` cleanly.
-3. **Memory Hydration:** Svelte's stores are injected with the fully downloaded lists (`await db.transactions.toArray()`). 
-4. **Auto-Pay Engine Triggered:** `runAutoBilling()` evaluates chronological skips and sequentially backfills constraints dynamically into both `IndexedDB` and Memory simultaneously.
-
-### The Write-Through Proxy (`financeApi`)
-No Svelte component talks directly to the database OR updates Svelte array references raw. They strictly call the `financeApi`. 
-
-When a user logs an expense via `LogView.svelte`:
-```typescript
-await financeApi.addTransaction(...) 
-// 1. Awaits deep Dexie non-blocking put: db.transactions.put(newTx)
-// 2. Synchronously unshifts locally: transactions.update(...)
-// Result: UI renders instantly, data ensures it is saved structurally.
+```mermaid
+flowchart TB
+  subgraph client [Client]
+    UI[React Views]
+    RQ[TanStack Query]
+    API[api.ts Axios]
+    IDB[(IndexedDB cache + queue)]
+    UI --> RQ --> API
+    RQ --> IDB
+  end
+  subgraph server [Server]
+    FAST[FastAPI]
+    SVC[services.py]
+    CRUD[crud.py]
+    DB[(SQLite / PostgreSQL)]
+    FAST --> CRUD --> DB
+    FAST --> SVC
+  end
+  API -->|HTTPS or HTTP LAN| FAST
 ```
 
 ---
 
-## 🔄 Core Algorithms & Math Engine
+## Repository layout
 
-The central nervous system of the financial layout relies on the `$thisMonthData` derived store. Any time `transactions` or `budgetState` changes, the graph evaluates instantaneously to redraw Safe To Spend gauges and Pie charts.
+### Backend (`backend/`)
 
-### The "Safe to Spend" Derivation Graph
-The calculation strictly answers: **"How much money do I truly have left to safely spend today?"**
+| Path | Role |
+|------|------|
+| `app/main.py` | App factory, CORS, routers, APScheduler, `/health` |
+| `app/services.py` | `calculate_dashboard()`, `run_auto_billing()` |
+| `app/crud.py` | Database operations (per `user_id`) |
+| `app/models.py` | SQLAlchemy models |
+| `app/schemas.py` | Pydantic request/response types |
+| `app/auth.py` | JWT, bcrypt, `get_current_user` |
+| `app/routers/` | REST route modules |
+| `alembic/versions/` | Schema migrations |
 
-It builds this answer across several phases:
+### Frontend (`frontend/`)
 
-1. **Calculate the Active Ledger Timeframe:**
-   - Evaluates the oldest transaction date logged.
-   - Builds a mathematical map of active "Months" lived in the app.
-   
-2. **Amortization (Expense Spreading):**
-   - If an expense was logged with `durationMonths = 12` (e.g. an Annual VPN). 
-   - The algorithm splits the burden. Instead of deducting `-₹6000` entirely from exactly *this* month, it triggers a `for()` loop that chronologically deposits a `-₹500` deduction ghost footprint into the ledger for exactly the 12 active months surrounding it.
-
-3. **Compute Historical Rollover:**
-   - `Historical Income = (Base Income * active months lived) + Custom logged income`
-   - `Historical Deficit = Sum(past amortized logic) + Sum(autopays * active months)`
-   - `Dynamic Rollover = Global Offset + Historical Income - Historical Deficit`
-
-4. **Aggregate The Final Budget Vector:**
-   - **Formula:** `Assumed Income (This Month) + Dynamic Rollover Surpluses - Dedicated AutoPays Triggering This Month - Variable Dynamic Amortized Expenses Hitting This Month` = **Safe to Spend Total**.
+| Path | Role |
+|------|------|
+| `src/App.tsx` | Auth gate, tab shell, nav, privacy overlay |
+| `src/lib/LogView.tsx` | Expense logging + numpad |
+| `src/lib/DashboardView.tsx` | Overview / safe-to-spend |
+| `src/lib/HistoryView.tsx` | Transaction history |
+| `src/lib/ManageView.tsx` | Settings |
+| `src/lib/AuthView.tsx` | Login / register |
+| `src/lib/api.ts` | HTTP client + types |
+| `src/lib/hooks.ts` | React Query + offline mutations |
+| `src/lib/offlineSync.ts` | Cache, queue, sync |
+| `src/lib/localDb.ts` | IndexedDB stores |
+| `src/lib/SyncProvider.tsx` | Online/offline sync UI trigger |
 
 ---
 
-## 🧩 Component Architecture Data Flow
+## Request lifecycle (online)
 
-State passes unidirectionally from the memory stores down into distinct rendering zones.
+1. User action in a view (e.g. add transaction).
+2. `hooks.ts` mutation runs `api.*` or offline fallback.
+3. Axios sends `Authorization: Bearer <token>` to `/api/...`.
+4. FastAPI `get_current_user` validates JWT (`sub` = username).
+5. Router calls `crud.*` with `current_user.id`.
+6. On success, React Query invalidates or hydrates from `localDb`.
 
-1. **`App.svelte` (Base Root Container)**
-   - Manages floating absolute `bottom-nav` routing.
-   - Restricts body overflow context.
-   
-2. **`DashboardView.svelte` Context**
-   - Listens identically directly to `$thisMonthData` derivations. 
-   - Unrolls `$derived.currentCategorySpending` into a mapped conic-gradient algorithm dictating the absolute visual arc geometry of the Donut Chart.
+---
 
-3. **`LogView.svelte` Context**
-   - Isolates complex transient input states (`amountStr`, `durationMonths`) internally away from global state pools natively tracking local `$state` primitives.
-   - Bridges to global logic exclusively by awaiting `handleSave()` wrapping the non-blocking `financeApi`.
+## Budget engine (server)
 
-4. **`ManageView.svelte` Context**
-   - The authoritative mutation interface for the `budgetState` logic arrays structure and mapping overrides (`AutoPay`, `Categories`).
-   - Handles the absolute `Factory Reset` wiping process natively wiping active `IndexedDB` properties gracefully.
+**Source of truth:** `backend/app/services.py` → `calculate_dashboard()`.
+
+Inputs per user:
+
+- All transactions (amount, category, date, `duration_months`, `is_income`)
+- Auto-pay rules (sum of amounts)
+- `budget_state`: `monthly_income`, `rollover_amount`, `base_budget` (stored; `base_budget` not used in formula today)
+
+Logic (simplified):
+
+1. **Amortize** non-income expenses over `duration_months` into past/current/future months.
+2. **Income** transactions add to current month income.
+3. **Auto-Pay** category txs are excluded from amortization (rules handle monthly deduction).
+4. **Dynamic rollover** adjusts for past months’ income vs spend vs auto-pays.
+5. **Safe to spend** = income + current month income + rollover − auto-pay rules − current month amortized burden.
+
+Exposed as `GET /api/budget/summary` and `GET /api/dashboard`.
+
+---
+
+## Auto-billing
+
+`run_auto_billing()` in `services.py`:
+
+- Runs on server startup, daily cron (00:05), new auto-pay create, and after import.
+- For each rule, creates `Auto-Pay` transactions for each month not yet billed.
+- Bills past months immediately; current month only after `billing_day`.
+- Transactions link via `auto_pay_id`; edits blocked, deletes blocked on auto-billed rows.
+
+---
+
+## Auth
+
+- Register: JSON body → user + seeded categories + JWT.
+- Login: OAuth2 form (`username`, `password`) → JWT + user.
+- Token: HS256, default 30-day expiry (`ACCESS_TOKEN_EXPIRE_MINUTES`).
+- Protected routes require `Authorization: Bearer ...`.
+
+---
+
+## Android (Capacitor)
+
+- Web assets in `frontend/dist` copied to `android/app/src/main/assets`.
+- `capacitor.config.json`: `webDir: dist`, `androidScheme: http` for LAN HTTP API during dev.
+- Native token storage: `@capacitor/preferences` via `storage.ts`.
+- Debug APK: Gradle `assembleDebug` → `app-debug.apk`.
+
+See [INSTALL_DEBUG_APK.md](INSTALL_DEBUG_APK.md) and [OFFLINE.md](OFFLINE.md).
+
+---
+
+## Security notes
+
+- Passwords hashed with bcrypt (not stored plain).
+- All financial queries filtered by `user_id`.
+- Production: set `SECRET_KEY`, `ENABLE_DOCS=false`, PostgreSQL, HTTPS only.
+- CORS must include Capacitor origins (`capacitor://localhost`, `https://localhost`, `http://localhost`).

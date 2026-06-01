@@ -17,6 +17,7 @@ def _tx_out(t: models.Transaction) -> schemas.TransactionOut:
         time=t.time,
         duration_months=t.duration_months,
         is_income=t.is_income,
+        auto_pay_id=t.auto_pay_id,
     )
 
 
@@ -61,6 +62,12 @@ def delete_transaction(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    ok = crud.delete_transaction(db, current_user.id, tx_id)
-    if not ok:
+    tx = crud.get_transaction(db, current_user.id, tx_id)
+    if tx is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    if tx.auto_pay_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Auto-billed transactions cannot be deleted. Remove the auto-pay rule instead.",
+        )
+    crud.delete_transaction(db, current_user.id, tx_id)
